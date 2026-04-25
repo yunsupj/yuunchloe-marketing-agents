@@ -14,7 +14,7 @@ gcloud run jobs deploy kkaetalk-daily-marketing \
     --image gcr.io/$PROJECT_ID/$IMAGE_NAME \
     --region $REGION \
     --memory 2Gi \
-    --set-env-vars="AUTO_EMIT_JSON=1" \
+    --update-env-vars="AUTO_EMIT_JSON=1" \
     --max-retries 1
 
 echo "✅ Cloud Run Job 배포 완료!"

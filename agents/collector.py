@@ -47,7 +47,7 @@ def _build_prompt_llm() -> ChatOpenAI:
 
     qwen_key = os.getenv("QWEN_API_KEY")
     base_url = os.getenv("QWEN_BASE_URL")
-    model = os.getenv("QWEN_FAST_MODEL_NAME", "qwen-turbo")
+    model = os.getenv("QWEN_MODEL_NAME", "qwen-turbo")
     kwargs: dict[str, Any] = {"model": model, "temperature": 0.2}
     if qwen_key:
         kwargs["api_key"] = qwen_key

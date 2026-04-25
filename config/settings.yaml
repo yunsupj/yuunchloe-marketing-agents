@@ -1,0 +1,96 @@
+# =============================================================================
+# Active Profile Configuration
+# ---------------------------------------------------------------------------
+# This file is the single source of truth injected into the LangGraph pipeline
+# at runtime. To target a different app (e.g. 'Pickle') or region (e.g. 'NYC'),
+# swap the `active_profile` key OR point APP_CONFIG_PATH at a different file.
+# The graph logic in /core/graph.py must NEVER hardcode these values.
+# =============================================================================
+
+active_profile: kkaertalk_la_oc
+
+# -----------------------------------------------------------------------------
+# LLM Routing Strategy
+# Map logical roles -> concrete model IDs so agents stay provider-agnostic.
+# -----------------------------------------------------------------------------
+llm_routing:
+  # Cheap / fast tier: data collection, summarization, routing decisions
+  fast:
+    provider: openai
+    model: gpt-4o-mini
+    temperature: 0.2
+  fast_alt:
+    provider: dashscope
+    model: qwen-turbo
+    temperature: 0.2
+  # High-quality tier: persona writing, strict Critic / Editor feedback loop
+  quality:
+    provider: dashscope
+    model: qwen-max
+    temperature: 0.7
+
+# -----------------------------------------------------------------------------
+# App Profiles
+# Each profile is a self-contained context object injected into the graph
+# state as `app_context`. Add new apps by appending a new key here.
+# -----------------------------------------------------------------------------
+profiles:
+  kkaertalk_la_oc:
+    app_name: Kkaertalk
+    app_tagline: "Your hyper-local Korean community, right next door."
+    app_description: >
+      Kkaertalk is a hyper-local community app connecting Korean-American
+      neighbors for recommendations, classifieds, events, and real-time
+      neighborhood chatter.
+    brand_voice:
+      tone: "warm, neighborly, conversational"
+      persona: "a trusted Korean-American friend who knows the best local spots"
+      do:
+        - "use concrete local landmarks and business names"
+        - "mix in natural bilingual phrasing (Korean + English) where it feels organic"
+        - "lead with community benefit, not product features"
+      dont:
+        - "sound corporate or sales-y"
+        - "use generic stock-marketing phrasing"
+        - "over-translate — trust the bilingual reader"
+    target_regions:
+      - id: la_oc
+        label: "LA / OC"
+        locales: [en-US, ko-KR]
+        sub_regions:
+          - Torrance
+          - South Bay
+          - Irvine
+          - Santa Monica
+          - West LA
+    distribution_channels:
+      - instagram
+      - kakao_channel
+      - reddit_local
+
+  # ---- Example placeholder for future expansion (do not remove) ----
+  pickle_sf:
+    app_name: Pickle
+    app_tagline: "Your AI shopping agent."
+    app_description: "TODO: fill in when Pickle profile is activated."
+    brand_voice:
+      tone: "TODO"
+      persona: "TODO"
+      do: []
+      dont: []
+    target_regions:
+      - id: sf_bay
+        label: "SF / Bay Area"
+        locales: [en-US]
+        sub_regions: []
+    distribution_channels: []
+
+# -----------------------------------------------------------------------------
+# Pipeline Controls
+# -----------------------------------------------------------------------------
+pipeline:
+  critic:
+    max_revision_loops: 3       # hard cap on Writer <-> Critic cycles
+    min_quality_score: 0.8      # Critic approves when score >= this
+  publishing:
+    dry_run: true               # when true, skip real API posts

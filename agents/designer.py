@@ -332,6 +332,69 @@ def _download_font(font_path: Path) -> Path:
 
 
 # =============================================================================
+# Supabase Storage upload (final hosting for the overlaid image)
+# =============================================================================
+
+
+SUPABASE_BUCKET = "marketing-assets"
+
+
+def _build_storage_client():
+    """Lazy supabase client. Returns None when package or env vars missing."""
+    try:
+        from supabase import create_client
+    except ImportError:
+        print("[Designer] supabase-py not installed — skipping upload.")
+        return None
+
+    url = os.getenv("EXPO_PUBLIC_SUPABASE_URL")
+    key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("EXPO_PUBLIC_SUPABASE_ANON_KEY")
+    )
+    if not url or not key:
+        print("[Designer] Supabase env vars missing — skipping upload.")
+        return None
+
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        print(f"[Designer] Supabase client init failed: {e!r}")
+        return None
+
+
+def _upload_to_supabase(png_bytes: bytes) -> str | None:
+    """
+    Upload PNG bytes to the `marketing-assets` bucket and return the public
+    HTTPS URL. Returns None on any failure so the caller can fall back to
+    the raw image URL.
+    """
+    client = _build_storage_client()
+    if client is None:
+        return None
+
+    bucket_name = os.getenv("SUPABASE_MARKETING_BUCKET", SUPABASE_BUCKET)
+    filename = f"post_{int(time.time())}.png"
+
+    try:
+        bucket = client.storage.from_(bucket_name)
+        bucket.upload(
+            path=filename,
+            file=png_bytes,
+            file_options={"content-type": "image/png", "upsert": "true"},
+        )
+        public_url = bucket.get_public_url(filename)
+    except Exception as e:
+        print(f"[Designer] Supabase upload failed: {e!r} — using raw image URL.")
+        return None
+
+    if not isinstance(public_url, str) or not public_url.startswith("http"):
+        print(f"[Designer] Unexpected public_url shape: {public_url!r}")
+        return None
+    return public_url
+
+
+# =============================================================================
 # Text overlay
 # =============================================================================
 
@@ -459,11 +522,20 @@ def _apply_text_overlay(image_url_or_path: str, text: str) -> str:
 
         composed = Image.alpha_composite(base, overlay_layer).convert("RGB")
 
-        out_dir = Path(os.getenv("IMAGE_OUTPUT_DIR", "output"))
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"overlay-{int(time.time() * 1000)}.png"
-        composed.save(out_path, format="PNG")
-        return out_path.resolve().as_uri()
+        # Compose to memory, then upload to Supabase Storage. Returning a
+        # public HTTPS URL lets the publisher webhook + downstream channels
+        # fetch the asset without any local-filesystem dependency.
+        buf = io.BytesIO()
+        composed.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        public_url = _upload_to_supabase(png_bytes)
+        if public_url:
+            return public_url
+
+        # Upload unavailable — fall back to the raw image URL we started with
+        # so the pipeline still produces *something* fetchable downstream.
+        return image_url_or_path
 
     except Exception as e:
         print(f"[Designer] Text overlay failed: {e!r} — using raw image.")

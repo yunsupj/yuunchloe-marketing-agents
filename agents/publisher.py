@@ -1,90 +1,299 @@
 """
-Publisher agent: ships the approved draft + image to a downstream webhook
-(e.g. Zapier, Make, n8n, or our own dispatcher service that fans out to
-Instagram / Kakao Channel / Reddit).
+Human-in-the-loop publisher node.
 
-Honors `pipeline.publishing.dry_run` from settings.yaml — when true, prints
-the would-be payload and skips the network call. The pipeline config is
-expected to be threaded into graph state as `pipeline_config` by main.py.
+Replaces the old dry_run / direct-webhook publisher. For each generated
+post we:
+    1. Insert a row into Supabase `marketing_posts` with status='pending'.
+    2. Post an interactive Slack approval message (Block Kit) into the
+       configured channel — text + image + Approve/Reject buttons.
+    3. A separate Slack-interactivity webhook (out of scope here) flips
+       the row's status to 'approved' / 'rejected' and triggers the
+       actual publish on approval.
+
+Required env:
+    EXPO_PUBLIC_SUPABASE_URL
+    SUPABASE_SERVICE_ROLE_KEY  (preferred)  or  EXPO_PUBLIC_SUPABASE_ANON_KEY
+    SLACK_BOT_TOKEN
+    SLACK_APPROVAL_CHANNEL_ID
 """
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
 import requests
 
 
-def _is_dry_run(state: dict[str, Any]) -> bool:
-    """
-    Default is True (safe) when the pipeline_config is missing or malformed —
-    the publisher should never accidentally post in an under-configured run.
-    """
-    pipeline_config = state.get("pipeline_config") or {}
-    publishing = pipeline_config.get("publishing") or {}
-    dry_run = publishing.get("dry_run", True)
-    return bool(dry_run)
+SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
+
+# Slack section text caps at 3000 chars; leave headroom for our wrapper text.
+_SLACK_TEXT_BUDGET = 2500
 
 
-def _build_payload(state: dict[str, Any]) -> dict[str, Any]:
-    app_context = state.get("app_context") or {}
-    target_region = state.get("target_region") or {}
-    return {
-        "text": state.get("draft") or "",
-        "image_url": state.get("image_url") or "",
-        "image_model": state.get("image_model") or "",
-        "overlay_text": state.get("overlay_text") or "",
-        "channels": app_context.get("distribution_channels") or [],
-        "app_name": app_context.get("app_name"),
-        "region": target_region.get("label"),
-        "critic_score": state.get("critic_score"),
+# =============================================================================
+# Supabase client (lazy, same shape as auto_scheduler / designer)
+# =============================================================================
+
+
+def _build_supabase_client():
+    try:
+        from supabase import create_client
+    except ImportError:
+        print("[Publisher] supabase-py not installed.")
+        return None
+
+    url = os.getenv("EXPO_PUBLIC_SUPABASE_URL")
+    key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("EXPO_PUBLIC_SUPABASE_ANON_KEY")
+    )
+    if not url or not key:
+        print("[Publisher] Supabase env vars missing.")
+        return None
+
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        print(f"[Publisher] Supabase client init failed: {e!r}")
+        return None
+
+
+# =============================================================================
+# State helpers
+# =============================================================================
+
+
+def _extract_topic(state: dict[str, Any]) -> str:
+    """
+    The collector node rewrites research_notes as
+        [원래 토픽]\n{query}\n\n[리서치 노트]\n{summary}
+    so the user's actual topic is the lines between [원래 토픽] and the next
+    blank line. Fall back to the whole research_notes blob, then to the
+    first line of the draft.
+    """
+    notes = (state.get("research_notes") or "").strip()
+    if "[원래 토픽]" in notes:
+        body = notes.split("[원래 토픽]", 1)[1].lstrip()
+        topic = body.split("[리서치 노트]", 1)[0].strip()
+        if topic:
+            return topic
+    if notes:
+        return notes
+    draft = (state.get("draft") or "").strip()
+    return draft.splitlines()[0] if draft else "(no topic)"
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+# =============================================================================
+# Supabase: insert pending row
+# =============================================================================
+
+
+def _insert_pending_row(
+    client, topic: str, draft: str, image_url: str
+) -> str | None:
+    """
+    Insert a row into `marketing_posts` and return the new row's id (as str)
+    or None on failure.
+    """
+    payload = {
+        "topic": topic,
+        "draft_text": draft,
+        "image_url": image_url,
+        "status": "pending",
     }
+    try:
+        resp = client.table("marketing_posts").insert(payload).execute()
+    except Exception as e:
+        print(f"[Publisher] Supabase insert failed: {e!r}")
+        return None
+
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        print(f"[Publisher] Supabase insert returned no row: {resp!r}")
+        return None
+    row_id = rows[0].get("id")
+    return str(row_id) if row_id is not None else None
+
+
+# =============================================================================
+# Slack Block Kit
+# =============================================================================
+
+
+def _build_blocks(
+    topic: str, draft: str, image_url: str, post_id: str
+) -> list[dict[str, Any]]:
+    body_text = _truncate(
+        f"*New marketing post — pending approval*\n"
+        f"*Topic:* {topic}\n\n{draft}",
+        _SLACK_TEXT_BUDGET,
+    )
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": body_text},
+        }
+    ]
+
+    # Image block is omitted if there's no URL — Slack rejects empty image_url.
+    if image_url:
+        blocks.append(
+            {
+                "type": "image",
+                "image_url": image_url,
+                "alt_text": "Generated marketing image",
+            }
+        )
+
+    blocks.append(
+        {
+            "type": "actions",
+            "block_id": f"marketing_post_{post_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Approve & Post"},
+                    "style": "primary",
+                    "value": "approve",
+                    "action_id": f"approve_post_{post_id}",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Reject"},
+                    "style": "danger",
+                    "value": "reject",
+                    "action_id": f"reject_post_{post_id}",
+                },
+            ],
+        }
+    )
+    return blocks
+
+
+def _post_to_slack(
+    bot_token: str,
+    channel: str,
+    topic: str,
+    blocks: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """
+    Returns (ok, info). On success, info is the message ts; on failure it's
+    the Slack error code or HTTP error description.
+    """
+    headers = {
+        "Authorization": f"Bearer {bot_token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    body = {
+        "channel": channel,
+        # Fallback text used in notifications and accessibility contexts.
+        "text": f"Pending approval — {topic}",
+        "blocks": blocks,
+    }
+    try:
+        resp = requests.post(
+            SLACK_POST_MESSAGE_URL, headers=headers, json=body, timeout=15
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return False, f"http error: {e!r}"
+
+    data = resp.json() if resp.content else {}
+    if not data.get("ok"):
+        return False, f"slack error: {data.get('error', 'unknown')}"
+    return True, str(data.get("ts", ""))
+
+
+# =============================================================================
+# Node
+# =============================================================================
 
 
 def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
-    payload = _build_payload(state)
+    draft = (state.get("draft") or "").strip()
+    image_url = (state.get("image_url") or "").strip()
+    topic = _extract_topic(state)
 
-    if _is_dry_run(state):
-        print("\n[Publisher · DRY RUN — payload that would be POSTed]")
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    bot_token = os.getenv("SLACK_BOT_TOKEN")
+    channel = os.getenv("SLACK_APPROVAL_CHANNEL_ID")
+
+    # Insert into Supabase first so an approval-button click always has a row
+    # to flip. If the insert fails we don't post to Slack — a Slack approval
+    # with no backing row is worse than no approval at all.
+    client = _build_supabase_client()
+    if client is None:
         return {
             "published": False,
-            "publish_status": "dry_run",
-            "history": [{"node": "publisher", "dry_run": True}],
+            "publish_status": "error: supabase unavailable",
+            "history": [
+                {"node": "publisher", "error": "supabase unavailable"}
+            ],
         }
 
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if not webhook_url:
-        msg = "WEBHOOK_URL env var is not set — cannot publish."
-        print(f"[Publisher · ERROR] {msg}")
+    post_id = _insert_pending_row(client, topic, draft, image_url)
+    if post_id is None:
         return {
             "published": False,
-            "publish_status": f"error: {msg}",
-            "history": [{"node": "publisher", "error": msg}],
+            "publish_status": "error: supabase insert failed",
+            "history": [
+                {"node": "publisher", "error": "supabase insert failed"}
+            ],
         }
 
-    try:
-        resp = requests.post(webhook_url, json=payload, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[Publisher · ERROR] Webhook POST failed: {e!r}")
+    if not bot_token or not channel:
+        msg = "SLACK_BOT_TOKEN or SLACK_APPROVAL_CHANNEL_ID not set"
+        print(f"[Publisher] {msg} — row {post_id} stays pending (no Slack ping).")
         return {
             "published": False,
-            "publish_status": f"error: {e!r}",
-            "history": [{"node": "publisher", "error": repr(e)}],
+            "publish_status": f"pending (no slack): row {post_id}",
+            "history": [
+                {
+                    "node": "publisher",
+                    "supabase_id": post_id,
+                    "slack_sent": False,
+                    "error": msg,
+                }
+            ],
         }
 
-    print(f"[Publisher] Posted to webhook ({resp.status_code}).")
+    blocks = _build_blocks(topic, draft, image_url, post_id)
+    ok, info = _post_to_slack(bot_token, channel, topic, blocks)
+    if not ok:
+        print(f"[Publisher] Slack post failed: {info}")
+        return {
+            "published": False,
+            "publish_status": f"pending (slack failed: {info}): row {post_id}",
+            "history": [
+                {
+                    "node": "publisher",
+                    "supabase_id": post_id,
+                    "slack_sent": False,
+                    "error": info,
+                }
+            ],
+        }
+
+    print(
+        f"[Publisher] Slack approval message sent (ts={info}) "
+        f"for marketing_posts.id={post_id}."
+    )
     return {
-        "published": True,
-        "publish_status": f"ok ({resp.status_code})",
+        "published": False,  # publishing happens after human approval
+        "publish_status": f"pending approval: row {post_id}",
         "history": [
             {
                 "node": "publisher",
-                "status_code": resp.status_code,
-                "channels": payload["channels"],
+                "supabase_id": post_id,
+                "slack_sent": True,
+                "slack_ts": info,
             }
         ],
     }

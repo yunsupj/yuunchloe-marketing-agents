@@ -7,7 +7,7 @@
 # The graph logic in /core/graph.py must NEVER hardcode these values.
 # =============================================================================
 
-active_profile: kkaertalk_la_oc
+active_profile: kkaertalk_info
 
 # -----------------------------------------------------------------------------
 # LLM Routing Strategy
@@ -35,38 +35,53 @@ llm_routing:
 # state as `app_context`. Add new apps by appending a new key here.
 # -----------------------------------------------------------------------------
 profiles:
-  kkaertalk_la_oc:
+  kkaertalk_info:
     app_name: Kkaertalk
     app_tagline: "Your hyper-local Korean community, right next door."
-    app_description: >
-      Kkaertalk is a hyper-local community app connecting Korean-American
-      neighbors for recommendations, classifieds, events, and real-time
-      neighborhood chatter.
+    app_description: "Kkaertalk is a hyper-local community app connecting Korean-American neighbors for recommendations, classifieds, events, and real-time neighborhood chatter."
     brand_voice:
-      tone: "warm, neighborly, conversational"
-      persona: "a trusted Korean-American friend who knows the best local spots"
+      tone: "깔끔하고 힙한 로컬 매거진 에디터 톤"
+      persona: "트렌디한 동네 정보통"
       do:
-        - "use concrete local landmarks and business names"
-        - "mix in natural bilingual phrasing (Korean + English) where it feels organic"
-        - "lead with community benefit, not product features"
+        - "핵심 정보(시간, 장소, 할인율, 꿀팁)를 가장 먼저 직관적으로 노출해라"
+        - "불필요한 감탄사는 줄이고 텍스트 가독성을 높여라"
+        - "세련된 한영 혼용(Code-switching)을 사용해라"
       dont:
-        - "sound corporate or sales-y"
-        - "use generic stock-marketing phrasing"
-        - "over-translate — trust the bilingual reader"
+        - "억지로 친한 척하거나 과도한 커뮤니티 은어 사용 금지"
+        - "AI 같은 번역체 금지"
+        - "앱에 없는 기능(예: 실시간 대기시간 확인, 예약, 배달 등)을 절대 지어내지 마라."
+        - "오직 깨알톡의 실제 기능(동네 주민들과의 실시간 채팅, 로컬 꿀팁 추천, 중고거래, 동네 이벤트 공유)만 언급해라."
     target_regions:
       - id: la_oc
         label: "LA / OC"
         locales: [en-US, ko-KR]
         sub_regions:
-          - Torrance
-          - South Bay
-          - Irvine
-          - Santa Monica
-          - West LA
-    distribution_channels:
-      - instagram
-      - kakao_channel
-      - reddit_local
+          ["Torrance", "South Bay", "Irvine", "Santa Monica", "West LA"]
+    distribution_channels: ["instagram", "reddit_local"]
+
+  kkaertalk_chat:
+    app_name: Kkaertalk
+    app_tagline: "Your hyper-local Korean community, right next door."
+    app_description: "Kkaertalk is a hyper-local community app connecting Korean-American neighbors for recommendations, classifieds, events, and real-time neighborhood chatter."
+    brand_voice:
+      tone: "블라인드/맘카페/미씨USA/레딧의 도파민 터지는 썰 푸는 톤"
+      persona: "억울하거나 답답해서 커뮤니티에 하소연하는 현실 동네 주민"
+      do:
+        - "감정(어이없음, 억울함, 빡침, 기쁨)을 극대화해서 표현해라"
+        - "글의 시작을 '하...', '아니 진짜 개어이없음', '나만 이럼?' 같은 리얼한 커뮤니티식 한탄으로 시작해라"
+        - "자연스러운 반말과 인터넷 말투를 써라"
+      dont:
+        - "정보를 나열하거나 딱딱하게 설명하지 마라"
+        - "앱 광고 티를 내지 마라 (자연스럽게 '앱에서 봤는데' 정도로만 흘려라)"
+        - "앱에 없는 기능(예: 실시간 대기시간 확인, 예약, 배달 등)을 절대 지어내지 마라."
+        - "오직 깨알톡의 실제 기능(동네 주민들과의 실시간 채팅, 로컬 꿀팁 추천, 중고거래, 동네 이벤트 공유)만 언급해라."
+    target_regions:
+      - id: la_oc
+        label: "LA / OC"
+        locales: [en-US, ko-KR]
+        sub_regions:
+          ["Torrance", "South Bay", "Irvine", "Santa Monica", "West LA"]
+    distribution_channels: ["instagram", "reddit_local"]
 
   # ---- Example placeholder for future expansion (do not remove) ----
   pickle_sf:
@@ -90,7 +105,7 @@ profiles:
 # -----------------------------------------------------------------------------
 pipeline:
   critic:
-    max_revision_loops: 3       # hard cap on Writer <-> Critic cycles
-    min_quality_score: 0.8      # Critic approves when score >= this
+    max_revision_loops: 3 # hard cap on Writer <-> Critic cycles
+    min_quality_score: 0.8 # Critic approves when score >= this
   publishing:
-    dry_run: true               # when true, skip real API posts
+    dry_run: true # when true, skip real API posts

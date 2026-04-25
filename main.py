@@ -138,8 +138,14 @@ def print_summary(final_state: dict[str, Any]) -> None:
 
     image_url = final_state.get("image_url")
     image_prompt = final_state.get("image_prompt")
+    image_model = final_state.get("image_model")
+    overlay_text = final_state.get("overlay_text")
     if image_url:
         print(f"\n[Image URL]  {image_url}")
+    if image_model:
+        print(f"[Image Model — A/B variant]  {image_model}")
+    if overlay_text:
+        print(f"[Overlay Text]  {overlay_text}")
     if image_prompt:
         print(f"[Image Prompt]  {image_prompt}")
 

@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.collector import collector_node
 from agents.critic import critic_node
 from agents.designer import designer_node
 from agents.publisher import publisher_node
@@ -70,7 +71,9 @@ class GraphState(TypedDict, total=False):
 
     # ---- Designer / Publisher ----
     image_prompt: str                   # english T2I prompt produced by Designer
-    image_url: str                      # URL of the generated hero image
+    overlay_text: str                   # short Korean text composited onto image
+    image_url: str                      # URL of the final overlaid hero image
+    image_model: str                    # which T2I model produced it (A/B tag)
     published: bool                     # True if Publisher hit the webhook OK
     publish_status: str                 # human-readable publish outcome
 
@@ -115,22 +118,24 @@ def build_graph():
     """
     Full content pipeline:
 
-        START -> writer -> critic -> approved? -> designer -> publisher -> END
-                              ^                  |
-                              | not approved &   |
-                              | under rev cap    |
-                              +------------------+
-                                                 |
-                              max revs hit ------> END (no publish)
+        START -> collector -> writer -> critic -> approved? -> designer -> publisher -> END
+                                          ^                  |
+                                          | not approved &   |
+                                          | under rev cap    |
+                                          +------------------+
+                                                             |
+                              max revs hit  ------> END (no publish)
     """
     builder = StateGraph(GraphState)
 
+    builder.add_node("collector", collector_node)
     builder.add_node("writer", writer_node)
     builder.add_node("critic", critic_node)
     builder.add_node("designer", designer_node)
     builder.add_node("publisher", publisher_node)
 
-    builder.add_edge(START, "writer")
+    builder.add_edge(START, "collector")
+    builder.add_edge("collector", "writer")
     builder.add_edge("writer", "critic")
     builder.add_conditional_edges(
         "critic",

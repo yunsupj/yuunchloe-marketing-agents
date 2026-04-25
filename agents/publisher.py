@@ -34,6 +34,8 @@ def _build_payload(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": state.get("draft") or "",
         "image_url": state.get("image_url") or "",
+        "image_model": state.get("image_model") or "",
+        "overlay_text": state.get("overlay_text") or "",
         "channels": app_context.get("distribution_channels") or [],
         "app_name": app_context.get("app_name"),
         "region": target_region.get("label"),

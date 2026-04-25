@@ -23,14 +23,27 @@ APPROVAL_THRESHOLD = 0.8
 
 
 def _build_llm() -> ChatOpenAI:
-    """Qwen via DashScope's OpenAI-compatible API — same shape as writer."""
-    api_key = os.getenv("QWEN_API_KEY")
+    """
+    Critic LLM. Same priority shape as the writer: gpt-4o-mini pinned when
+    OpenAI is available (stable JSON output + tighter scoring discipline),
+    Qwen via DashScope as fallback. Temp 0.2 — this is fact + scoring work,
+    not creative writing.
+    """
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        return ChatOpenAI(
+            model="gpt-4o-mini",  # pinned: matches writer for consistent grading
+            temperature=0.2,
+            api_key=openai_key,
+        )
+
+    qwen_key = os.getenv("QWEN_API_KEY")
     base_url = os.getenv("QWEN_BASE_URL")
     model = os.getenv("QWEN_MODEL_NAME", "qwen3.5-flash")
 
     kwargs: dict[str, Any] = {"model": model, "temperature": 0.2}
-    if api_key:
-        kwargs["api_key"] = api_key
+    if qwen_key:
+        kwargs["api_key"] = qwen_key
     if base_url:
         kwargs["base_url"] = base_url
 

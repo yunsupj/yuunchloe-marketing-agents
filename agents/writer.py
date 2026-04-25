@@ -27,20 +27,26 @@ from prompts.writer_prompt import (
 
 def _build_llm() -> ChatOpenAI:
     """
-    Qwen-max via DashScope's OpenAI-compatible API.
-
-    DashScope exposes an OpenAI-protocol endpoint, so ChatOpenAI works as long
-    as we point `base_url` at it and pass the DashScope key. Falls back to the
-    standard OpenAI envs if the DashScope ones aren't set, so this still runs
-    in a dev environment without DashScope credentials.
+    Persona writer LLM. Prioritizes gpt-4o-mini (pinned, not env-overridable)
+    for stable instruction following + persona consistency. Falls back to
+    Qwen via DashScope's OpenAI-compatible endpoint when no OpenAI key is
+    present, so the project still runs in DashScope-only environments.
     """
-    api_key = os.getenv("QWEN_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        return ChatOpenAI(
+            model="gpt-4o-mini",  # pinned: persona consistency > model choice
+            temperature=0.7,
+            api_key=openai_key,
+        )
+
+    qwen_key = os.getenv("QWEN_API_KEY")
     base_url = os.getenv("QWEN_BASE_URL")
     model = os.getenv("QWEN_MODEL_NAME", "qwen3.5-flash")
 
     kwargs: dict[str, Any] = {"model": model, "temperature": 0.7}
-    if api_key:
-        kwargs["api_key"] = api_key
+    if qwen_key:
+        kwargs["api_key"] = qwen_key
     if base_url:
         kwargs["base_url"] = base_url
 
@@ -55,6 +61,8 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
     prompt = WRITER_SYSTEM_PROMPT.format(
         app_name=app_context.get("app_name", "the app"),
         target_region_label=target_region.get("label", "this region"),
+        brand_voice_persona=brand_voice.get("persona") or "(persona not specified)",
+        brand_voice_tone=brand_voice.get("tone") or "(tone not specified)",
         brand_voice_do=render_do_dont(brand_voice.get("do")),
         brand_voice_dont=render_do_dont(brand_voice.get("dont")),
         research_notes=state.get("research_notes") or "(no research notes provided)",

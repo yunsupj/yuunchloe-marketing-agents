@@ -116,27 +116,40 @@ def get_hot_community_topic() -> str | None:
 # =============================================================================
 
 
-LOCAL_HOTPLACES: list[str] = [
-    "Torrance Mitsuwa 푸드코트",
-    "Torrance H Mart 주차장",
-    "Gardena Kaju Soft Tofu (가주순두부)",
-    "Irvine Spectrum Center",
-    "Buena Park Source Mall (소스몰)",
-    "K-town Quarters Korean BBQ",
-    "Costa Mesa The LAB Anti-Mall",
-    "Santa Monica 3rd Street Promenade",
-    "West LA 한인타운 BCD Tofu House",
-    "Cerritos Galleria 한인 푸드코트",
-    "Fullerton Sunday Farmers Market",
-    "Long Beach 2nd Street Belmont Shore",
-    "Rolling Hills Estates Peninsula Center",
-    "Anaheim GardenWalk",
-    "Palos Verdes 해안 드라이브",
-]
-
-
 def get_local_hotplace() -> str:
-    return random.choice(LOCAL_HOTPLACES)
+    """
+    Pull the hotplace pool from Supabase (`marketing_hotspots` table) and
+    return one at random. On any failure (no client, query error, empty
+    table) silently degrades to a tiny in-code fallback list so the daily
+    post never misses.
+    """
+    fallback = [
+        "Torrance Mitsuwa 푸드코트",
+        "K-town BCD Tofu House (북창동순두부 본점)",
+        "Irvine Spectrum Center",
+    ]
+
+    client = _build_supabase_client()
+    if client is None:
+        return random.choice(fallback)
+
+    try:
+        resp = client.table("marketing_hotspots").select("name").execute()
+    except Exception as e:
+        print(f"[auto] marketing_hotspots query failed: {e!r} — using fallback.")
+        return random.choice(fallback)
+
+    rows = getattr(resp, "data", None) or []
+    names = [
+        (row.get("name") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and (row.get("name") or "").strip()
+    ]
+    if not names:
+        print("[auto] marketing_hotspots returned no rows — using fallback.")
+        return random.choice(fallback)
+
+    return random.choice(names)
 
 
 # =============================================================================

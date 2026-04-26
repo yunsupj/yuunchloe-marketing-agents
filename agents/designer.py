@@ -23,8 +23,7 @@ import random
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import url2pathname
+from urllib.parse import quote
 
 import requests
 
@@ -222,44 +221,24 @@ def _generate_image(prompt: str) -> tuple[str, str]:
 
 def _apply_html_template(image_url: str, text: str) -> bytes:
     """
-    Render the final slide image with `text` overlayed on `image_url`.
+    Render the final slide image by calling the external Next.js Vercel OG
+    image-generation engine. Returns the rendered PNG bytes.
 
-    PLACEHOLDER — currently just fetches the raw image bytes; the `text`
-    arg is intentionally ignored. Later this will call a templating service
-    so the overlay typography matches the rest of the brand surface.
-
-    TODO — Bannerbear integration:
-        token  = os.environ["BANNERBEAR_API_KEY"]
-        tpl_id = os.environ["BANNERBEAR_TEMPLATE_ID"]
-        body = {
-            "template": tpl_id,
-            "modifications": [
-                {"name": "background", "image_url": image_url},
-                {"name": "headline",   "text": text},
-            ],
-        }
-        # Use /v2/images?synchronous=true to avoid the polling dance.
-        r = requests.post(
-            "https://sync.api.bannerbear.com/v2/images",
-            headers={"Authorization": f"Bearer {token}"},
-            json=body, timeout=60,
-        )
-        r.raise_for_status()
-        rendered_url = r.json()["image_url"]
-        return requests.get(rendered_url, timeout=30).content
+    On failure, the exception is logged and re-raised so `_render_slide` can
+    fall back to the raw image URL.
     """
-    _ = text  # reserved for the Bannerbear/HTML template renderer
+    og_base_url = os.getenv("OG_BASE_URL", "http://localhost:3000")
+    encoded_img = quote(image_url, safe="")
+    encoded_text = quote(text, safe="")
+    endpoint = f"{og_base_url}/api/og?image={encoded_img}&text={encoded_text}"
 
-    if image_url.startswith(("http://", "https://")):
-        resp = requests.get(image_url, timeout=30)
+    try:
+        resp = requests.get(endpoint, timeout=20)
         resp.raise_for_status()
         return resp.content
-
-    if image_url.startswith("file://"):
-        parsed = urlparse(image_url)
-        return Path(url2pathname(parsed.path)).read_bytes()
-
-    return Path(image_url).read_bytes()
+    except Exception as e:
+        print(f"[Designer] OG render failed ({endpoint}): {e!r}")
+        raise
 
 
 # =============================================================================

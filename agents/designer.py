@@ -1,23 +1,25 @@
 """
-Designer agent: turns the approved draft into (a) a detailed image prompt and
-(b) a short Korean overlay text. Generates a hero photo via Replicate
-(Flux-2-Pro) or Vertex AI (Imagen-4-Ultra) on a 50/50 A/B split, then
-composites the overlay text onto the photo with PIL — card-news style.
+Designer agent: render each slide of the carousel storyboard.
 
-Stages:
-    1. _build_prompt_llm()    — `fast` LLM extracts {image_prompt, overlay_text}.
-    2. _generate_image()      — A/B between Flux-2-Pro and Imagen-4-Ultra.
-    3. _apply_text_overlay()  — PIL composites Korean text on negative space.
+Pipeline per slide:
+    1. ai_generated -> _generate_image(slide["image_prompt"])
+       real_photo   -> use slide["source_url"]
+    2. _apply_html_template(image_url, overlay_text) -> bytes
+       (placeholder; later this calls Bannerbear or a similar HTML→image
+       renderer so overlay_text is laid out by a designed template instead
+       of PIL.)
+    3. Upload bytes to the Supabase `marketing-assets` bucket.
+    4. Collect the public HTTPS URL.
+
+Returns `state["carousel_urls"]` — one URL per rendered slide, in the same
+order as `state["carousel_draft"]`.
 """
 
 from __future__ import annotations
 
 import base64
-import io
-import json
 import os
 import random
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -25,87 +27,16 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import requests
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-
-from prompts.designer_prompt import DESIGNER_SYSTEM_PROMPT, DESIGNER_USER_TEMPLATE
 
 
 MOCK_IMAGE_URL = (
     "https://dummyimage.com/600x400/000/fff&text=Local+Photo+Placeholder"
 )
 MOCK_MODEL_NAME = "mock"
+REAL_PHOTO_TAG = "real_photo"
 
 FLUX_MODEL = "flux-2-pro"
 IMAGEN_MODEL = "imagen-4-ultra"
-
-# Korean-supporting font. Default is Noto Sans KR (variable TTF) from the
-# google/fonts repo — a reliable public mirror. Both the URL and the local
-# cache path are env-overridable.
-DEFAULT_KOREAN_FONT_URL = (
-    "https://github.com/google/fonts/raw/main/ofl/notosanskr/"
-    "NotoSansKR%5Bwght%5D.ttf"
-)
-DEFAULT_FONT_CACHE_DIR = Path.home() / ".cache" / "yc-marketing"
-DEFAULT_FONT_FILENAME = "NotoSansKR.ttf"
-
-
-# =============================================================================
-# Prompt-generation LLM (cheap/fast tier)
-# =============================================================================
-
-
-def _build_prompt_llm() -> ChatOpenAI:
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
-        model = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
-        return ChatOpenAI(model=model, temperature=0.4, api_key=openai_key)
-
-    qwen_key = os.getenv("QWEN_API_KEY")
-    base_url = os.getenv("QWEN_BASE_URL")
-    model = os.getenv("QWEN_FAST_MODEL_NAME", "qwen-turbo")
-    kwargs: dict[str, Any] = {"model": model, "temperature": 0.4}
-    if qwen_key:
-        kwargs["api_key"] = qwen_key
-    if base_url:
-        kwargs["base_url"] = base_url
-    return ChatOpenAI(**kwargs)
-
-
-def _strip_markdown_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-
-def _parse_designer_output(
-    raw: str, fallback_prompt: str, fallback_overlay: str
-) -> tuple[str, str]:
-    """Parse `{image_prompt, overlay_text}` tolerantly."""
-    cleaned = _strip_markdown_fences(raw)
-    data: Any = None
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                data = None
-
-    if not isinstance(data, dict):
-        return fallback_prompt, fallback_overlay
-
-    prompt = data.get("image_prompt")
-    overlay = data.get("overlay_text")
-    if not isinstance(prompt, str) or not prompt.strip():
-        prompt = fallback_prompt
-    if not isinstance(overlay, str) or not overlay.strip():
-        overlay = fallback_overlay
-    return prompt.strip(), overlay.strip()
 
 
 # =============================================================================
@@ -200,11 +131,6 @@ def _vertex_access_token() -> str:
 
 
 def _persist_vertex_image(b64_png: str) -> str:
-    """
-    For local dev we write to ./output/ and return a file:// URL — small,
-    runnable, no extra deps. In production swap this for an upload to GCS
-    (or S3 / Cloudflare R2) and return the public CDN URL.
-    """
     png_bytes = base64.b64decode(b64_png)
     out_dir = Path(os.getenv("IMAGE_OUTPUT_DIR", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -252,7 +178,7 @@ def _call_vertex_imagen(prompt: str) -> str:
 
 
 # =============================================================================
-# A/B selection
+# A/B selection (unchanged from single-image era)
 # =============================================================================
 
 
@@ -263,13 +189,7 @@ _MODEL_CALLERS = {
 
 
 def _generate_image(prompt: str) -> tuple[str, str]:
-    """
-    Returns `(image_url, model_name)`.
-
-    50/50 A/B between the two providers, with credential-aware and
-    runtime-error fallback to the other arm. Returns the mock URL only if
-    both arms are unavailable.
-    """
+    """Returns (image_url, model_name). 50/50 A/B with credential-aware fallback."""
     primary = random.choice([FLUX_MODEL, IMAGEN_MODEL])
     secondary = IMAGEN_MODEL if primary == FLUX_MODEL else FLUX_MODEL
 
@@ -296,43 +216,54 @@ def _generate_image(prompt: str) -> tuple[str, str]:
 
 
 # =============================================================================
-# Korean font download (cached)
+# HTML template renderer (PLACEHOLDER — Bannerbear later)
 # =============================================================================
 
 
-def _resolve_font_path() -> Path:
-    explicit = os.getenv("KOREAN_FONT_PATH")
-    if explicit:
-        return Path(explicit)
-    cache_dir = Path(os.getenv("FONT_CACHE_DIR", str(DEFAULT_FONT_CACHE_DIR)))
-    return cache_dir / DEFAULT_FONT_FILENAME
-
-
-def _download_font(font_path: Path) -> Path:
+def _apply_html_template(image_url: str, text: str) -> bytes:
     """
-    Ensure a Korean-supporting TTF lives at `font_path`. Download Noto Sans KR
-    from a public mirror if it's not already cached. Returns the path.
+    Render the final slide image with `text` overlayed on `image_url`.
 
-    PIL's default fonts do NOT support Korean Hangul, so this step is required
-    before any text overlay can render correctly.
+    PLACEHOLDER — currently just fetches the raw image bytes; the `text`
+    arg is intentionally ignored. Later this will call a templating service
+    so the overlay typography matches the rest of the brand surface.
+
+    TODO — Bannerbear integration:
+        token  = os.environ["BANNERBEAR_API_KEY"]
+        tpl_id = os.environ["BANNERBEAR_TEMPLATE_ID"]
+        body = {
+            "template": tpl_id,
+            "modifications": [
+                {"name": "background", "image_url": image_url},
+                {"name": "headline",   "text": text},
+            ],
+        }
+        # Use /v2/images?synchronous=true to avoid the polling dance.
+        r = requests.post(
+            "https://sync.api.bannerbear.com/v2/images",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body, timeout=60,
+        )
+        r.raise_for_status()
+        rendered_url = r.json()["image_url"]
+        return requests.get(rendered_url, timeout=30).content
     """
-    if font_path.is_file() and font_path.stat().st_size > 0:
-        return font_path
+    _ = text  # reserved for the Bannerbear/HTML template renderer
 
-    url = os.getenv("KOREAN_FONT_URL", DEFAULT_KOREAN_FONT_URL)
-    font_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[Designer] Downloading Korean font: {url}")
-    resp = requests.get(url, timeout=60, stream=True)
-    resp.raise_for_status()
-    with font_path.open("wb") as f:
-        for chunk in resp.iter_content(chunk_size=64 * 1024):
-            if chunk:
-                f.write(chunk)
-    return font_path
+    if image_url.startswith(("http://", "https://")):
+        resp = requests.get(image_url, timeout=30)
+        resp.raise_for_status()
+        return resp.content
+
+    if image_url.startswith("file://"):
+        parsed = urlparse(image_url)
+        return Path(url2pathname(parsed.path)).read_bytes()
+
+    return Path(image_url).read_bytes()
 
 
 # =============================================================================
-# Supabase Storage upload (final hosting for the overlaid image)
+# Supabase Storage upload
 # =============================================================================
 
 
@@ -340,7 +271,6 @@ SUPABASE_BUCKET = "marketing-assets"
 
 
 def _build_storage_client():
-    """Lazy supabase client. Returns None when package or env vars missing."""
     try:
         from supabase import create_client
     except ImportError:
@@ -363,18 +293,18 @@ def _build_storage_client():
         return None
 
 
-def _upload_to_supabase(png_bytes: bytes) -> str | None:
+def _upload_to_supabase(png_bytes: bytes, suffix: str = "") -> str | None:
     """
-    Upload PNG bytes to the `marketing-assets` bucket and return the public
-    HTTPS URL. Returns None on any failure so the caller can fall back to
-    the raw image URL.
+    Upload PNG bytes to the bucket, returning the public HTTPS URL.
+    `suffix` disambiguates within-second uploads (slide index, etc.).
     """
     client = _build_storage_client()
     if client is None:
         return None
 
     bucket_name = os.getenv("SUPABASE_MARKETING_BUCKET", SUPABASE_BUCKET)
-    filename = f"post_{int(time.time())}.png"
+    tail = f"_{suffix}" if suffix else ""
+    filename = f"slide_{int(time.time() * 1000)}{tail}.png"
 
     try:
         bucket = client.storage.from_(bucket_name)
@@ -385,7 +315,7 @@ def _upload_to_supabase(png_bytes: bytes) -> str | None:
         )
         public_url = bucket.get_public_url(filename)
     except Exception as e:
-        print(f"[Designer] Supabase upload failed: {e!r} — using raw image URL.")
+        print(f"[Designer] Supabase upload failed: {e!r}")
         return None
 
     if not isinstance(public_url, str) or not public_url.startswith("http"):
@@ -395,151 +325,54 @@ def _upload_to_supabase(png_bytes: bytes) -> str | None:
 
 
 # =============================================================================
-# Text overlay
+# Per-slide rendering
 # =============================================================================
 
 
-def _load_image_bytes(image_url_or_path: str) -> bytes:
-    """Read image bytes from an http(s) URL, file:// URI, or local path."""
-    if image_url_or_path.startswith(("http://", "https://")):
-        resp = requests.get(image_url_or_path, timeout=30)
-        resp.raise_for_status()
-        return resp.content
-
-    if image_url_or_path.startswith("file://"):
-        parsed = urlparse(image_url_or_path)
-        local_path = Path(url2pathname(parsed.path))
-    else:
-        local_path = Path(image_url_or_path)
-
-    return local_path.read_bytes()
-
-
-def _wrap_text_to_width(
-    text: str, font, max_width: int
-) -> list[str]:
+def _resolve_raw_image(slide: dict[str, Any]) -> tuple[str, str]:
     """
-    Greedy width-based wrapper. Korean wraps cleanly per-character (no spaces
-    required), so we accumulate characters until they'd exceed `max_width`
-    when measured by the font, then break.
+    Returns (raw_image_url, model_tag) for a single storyboard slide, or
+    ("", "") when the slide is malformed and should be skipped.
     """
-    if not text:
-        return []
+    slide_type = slide.get("type")
+    if slide_type == "ai_generated":
+        prompt = (slide.get("image_prompt") or "").strip()
+        if not prompt:
+            return "", ""
+        return _generate_image(prompt)
 
-    lines: list[str] = []
-    current = ""
-    for ch in text:
-        candidate = current + ch
-        if ch == "\n":
-            lines.append(current)
-            current = ""
-            continue
-        # font.getlength is the modern PIL API; falls back gracefully.
-        try:
-            width = font.getlength(candidate)
-        except AttributeError:
-            width = font.getsize(candidate)[0]  # type: ignore[attr-defined]
-        if width <= max_width:
-            current = candidate
-        else:
-            if current:
-                lines.append(current)
-            current = ch
-    if current:
-        lines.append(current)
-    return lines
+    if slide_type == "real_photo":
+        url = (slide.get("source_url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return "", ""
+        return url, REAL_PHOTO_TAG
+
+    return "", ""
 
 
-def _apply_text_overlay(image_url_or_path: str, text: str) -> str:
+def _render_slide(
+    slide: dict[str, Any], index: int
+) -> tuple[str, str]:
     """
-    Composite `text` onto the image with a semi-transparent dark band, save
-    to ./output/overlay-{timestamp}.png, and return the resulting file:// URI.
-
-    On any failure (Pillow missing, font download blocked, malformed image,
-    etc.) returns the original `image_url_or_path` unchanged so the pipeline
-    never hard-fails on the cosmetic step.
+    Returns (final_url, model_tag). Falls back to the raw URL (or mock) on
+    any rendering / upload failure so the carousel always has the right
+    number of entries.
     """
-    if not text or not text.strip():
-        return image_url_or_path
+    raw_url, model_tag = _resolve_raw_image(slide)
+    if not raw_url:
+        return MOCK_IMAGE_URL, MOCK_MODEL_NAME
 
+    overlay_text = (slide.get("overlay_text") or "").strip()
     try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError:
-        print("[Designer] Pillow not installed — skipping text overlay.")
-        return image_url_or_path
-
-    try:
-        img_bytes = _load_image_bytes(image_url_or_path)
-        base = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-
-        font_path = _download_font(_resolve_font_path())
-        # Font size scales with image width; clamped to a sensible range.
-        font_size = max(28, min(96, base.width // 16))
-        font = ImageFont.truetype(str(font_path), size=font_size)
-
-        # Wrap text to ~85% of image width.
-        max_text_width = int(base.width * 0.85)
-        lines = _wrap_text_to_width(text.strip(), font, max_text_width)
-        if not lines:
-            return image_url_or_path
-
-        # Measure block height.
-        line_heights: list[int] = []
-        for line in lines:
-            bbox = font.getbbox(line)
-            line_heights.append(bbox[3] - bbox[1])
-        line_spacing = int(font_size * 0.35)
-        text_block_h = sum(line_heights) + line_spacing * (len(lines) - 1)
-
-        # Bottom band: tall enough for the text block + generous padding.
-        padding_v = int(font_size * 0.9)
-        band_h = text_block_h + padding_v * 2
-        band_top = base.height - band_h
-
-        # Semi-transparent dark band on its own RGBA layer, then composited.
-        overlay_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay_layer)
-        draw.rectangle(
-            [(0, band_top), (base.width, base.height)],
-            fill=(0, 0, 0, int(255 * 0.4)),  # 40% opacity black
-        )
-
-        # Center each line horizontally inside the band.
-        y = band_top + padding_v
-        for line, h in zip(lines, line_heights):
-            try:
-                line_w = font.getlength(line)
-            except AttributeError:
-                line_w = font.getsize(line)[0]  # type: ignore[attr-defined]
-            x = (base.width - line_w) / 2
-            draw.text(
-                (x, y),
-                line,
-                font=font,
-                fill=(255, 255, 255, 255),
-            )
-            y += h + line_spacing
-
-        composed = Image.alpha_composite(base, overlay_layer).convert("RGB")
-
-        # Compose to memory, then upload to Supabase Storage. Returning a
-        # public HTTPS URL lets the publisher webhook + downstream channels
-        # fetch the asset without any local-filesystem dependency.
-        buf = io.BytesIO()
-        composed.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
-
-        public_url = _upload_to_supabase(png_bytes)
-        if public_url:
-            return public_url
-
-        # Upload unavailable — fall back to the raw image URL we started with
-        # so the pipeline still produces *something* fetchable downstream.
-        return image_url_or_path
-
+        png_bytes = _apply_html_template(raw_url, overlay_text)
     except Exception as e:
-        print(f"[Designer] Text overlay failed: {e!r} — using raw image.")
-        return image_url_or_path
+        print(f"[Designer] template apply failed for slide {index}: {e!r}")
+        return raw_url, model_tag
+
+    public_url = _upload_to_supabase(png_bytes, suffix=f"s{index}")
+    if not public_url:
+        return raw_url, model_tag
+    return public_url, model_tag
 
 
 # =============================================================================
@@ -548,71 +381,35 @@ def _apply_text_overlay(image_url_or_path: str, text: str) -> str:
 
 
 def designer_node(state: dict[str, Any]) -> dict[str, Any]:
-    draft = state.get("draft") or ""
-    if not draft:
+    carousel = state.get("carousel_draft") or []
+    if not carousel:
         return {
-            "image_url": MOCK_IMAGE_URL,
+            "carousel_urls": [],
+            "image_url": "",
             "image_model": MOCK_MODEL_NAME,
-            "image_prompt": "(no draft available)",
-            "overlay_text": "",
-            "history": [{"node": "designer", "skipped": True}],
+            "history": [{"node": "designer", "skipped": "no carousel_draft"}],
         }
 
-    app_context = state.get("app_context") or {}
-    target_region = state.get("target_region") or {}
-    sub_regions = target_region.get("sub_regions") or []
-    sub_regions_str = ", ".join(sub_regions) if sub_regions else "general area"
-
-    system_prompt = DESIGNER_SYSTEM_PROMPT.format(
-        app_name=app_context.get("app_name", "the app"),
-        target_region_label=target_region.get("label", "this region"),
-        sub_regions=sub_regions_str,
-    )
-    user_msg = DESIGNER_USER_TEMPLATE.format(draft=draft)
-
-    fallback_prompt = (
-        f"Cinematic editorial photography of an empty {target_region.get('label', 'LA')} "
-        f"strip-mall plaza at golden hour, palm tree silhouettes, large negative "
-        f"space across the upper sky and lower asphalt, 35mm, shallow depth of field, "
-        f"warm color grading, soft natural light, lifestyle magazine aesthetic."
-    )
-    fallback_overlay = "동네 사람만 아는 그곳"
-
-    try:
-        llm = _build_prompt_llm()
-        response = llm.invoke(
-            [SystemMessage(content=system_prompt), HumanMessage(content=user_msg)]
-        )
-        raw = getattr(response, "content", str(response))
-        image_prompt, overlay_text = _parse_designer_output(
-            raw, fallback_prompt=fallback_prompt, fallback_overlay=fallback_overlay
-        )
-    except Exception as e:
-        return {
-            "image_url": MOCK_IMAGE_URL,
-            "image_model": MOCK_MODEL_NAME,
-            "image_prompt": fallback_prompt,
-            "overlay_text": fallback_overlay,
-            "history": [
-                {"node": "designer", "error": f"prompt-llm failed: {e!r}"}
-            ],
-        }
-
-    raw_image_url, image_model = _generate_image(image_prompt)
-    final_image_url = _apply_text_overlay(raw_image_url, overlay_text)
+    carousel_urls: list[str] = []
+    model_tags: list[str] = []
+    for i, slide in enumerate(carousel, start=1):
+        if not isinstance(slide, dict):
+            continue
+        final_url, model_tag = _render_slide(slide, i)
+        carousel_urls.append(final_url)
+        if model_tag:
+            model_tags.append(model_tag)
 
     return {
-        "image_url": final_image_url,
-        "image_model": image_model,
-        "image_prompt": image_prompt,
-        "overlay_text": overlay_text,
+        "carousel_urls": carousel_urls,
+        # Cover URL alias for the existing summary printouts.
+        "image_url": carousel_urls[0] if carousel_urls else "",
+        "image_model": ",".join(sorted(set(model_tags))) or MOCK_MODEL_NAME,
         "history": [
             {
                 "node": "designer",
-                "image_model": image_model,
-                "raw_image_url": raw_image_url,
-                "image_url": final_image_url,
-                "overlay_chars": len(overlay_text),
+                "slide_count": len(carousel_urls),
+                "models": model_tags,
             }
         ],
     }

@@ -96,16 +96,18 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _insert_pending_row(
-    client, topic: str, draft: str, image_url: str
+    client, topic: str, draft: str, carousel_urls: list[str]
 ) -> str | None:
     """
     Insert a row into `marketing_posts` and return the new row's id (as str)
-    or None on failure.
+    or None on failure. `carousel_urls` is stored as an array (Postgres
+    TEXT[] / JSONB) so each slide URL is independently addressable from the
+    approval handler and downstream publisher.
     """
     payload = {
         "topic": topic,
         "draft_text": draft,
-        "image_url": image_url,
+        "carousel_urls": carousel_urls,
         "status": "pending",
     }
     try:
@@ -127,8 +129,11 @@ def _insert_pending_row(
 # =============================================================================
 
 
+_CAROUSEL_PREVIEW_LIMIT = 4
+
+
 def _build_blocks(
-    topic: str, draft: str, image_url: str, post_id: str
+    topic: str, draft: str, carousel_urls: list[str], post_id: str
 ) -> list[dict[str, Any]]:
     body_text = _truncate(
         f"*New marketing post — pending approval*\n"
@@ -143,13 +148,17 @@ def _build_blocks(
         }
     ]
 
-    # Image block is omitted if there's no URL — Slack rejects empty image_url.
-    if image_url:
+    # One image block per slide so the approver can scan the whole carousel.
+    # Slack rejects empty image_url, so each URL is filtered before append.
+    for i, url in enumerate(carousel_urls[:_CAROUSEL_PREVIEW_LIMIT], start=1):
+        if not url:
+            continue
         blocks.append(
             {
                 "type": "image",
-                "image_url": image_url,
-                "alt_text": "Generated marketing image",
+                "image_url": url,
+                "alt_text": f"Carousel slide {i}",
+                "title": {"type": "plain_text", "text": f"Slide {i}"},
             }
         )
 
@@ -219,7 +228,11 @@ def _post_to_slack(
 
 def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
     draft = (state.get("draft") or "").strip()
-    image_url = (state.get("image_url") or "").strip()
+    raw_urls = state.get("carousel_urls") or []
+    carousel_urls = [
+        u.strip() for u in raw_urls
+        if isinstance(u, str) and u.strip()
+    ]
     topic = _extract_topic(state)
 
     bot_token = os.getenv("SLACK_BOT_TOKEN")
@@ -238,7 +251,7 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    post_id = _insert_pending_row(client, topic, draft, image_url)
+    post_id = _insert_pending_row(client, topic, draft, carousel_urls)
     if post_id is None:
         return {
             "published": False,
@@ -264,7 +277,7 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    blocks = _build_blocks(topic, draft, image_url, post_id)
+    blocks = _build_blocks(topic, draft, carousel_urls, post_id)
     ok, info = _post_to_slack(bot_token, channel, topic, blocks)
     if not ok:
         print(f"[Publisher] Slack post failed: {info}")

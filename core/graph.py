@@ -59,21 +59,23 @@ class GraphState(TypedDict, total=False):
     target_region: TargetRegion
     pipeline_config: dict[str, Any]     # `pipeline.*` block from settings.yaml
 
-    # ---- Produced by upstream data-collection nodes (future) ----
+    # ---- Produced by upstream data-collection nodes ----
     research_notes: str                 # summarized local signals / trends
+    raw_photo_urls: list[str]           # real photos pulled from marketing_hotspots
 
     # ---- Writer <-> Critic loop ----
-    draft: str                          # current candidate content
+    draft: str                          # flattened text view (joined overlay_texts)
+    carousel_draft: list[dict[str, Any]]  # 3-slide storyboard: cover + 2 real photos
     revision: int                       # how many Writer passes have run
     critic_feedback: str                # latest Critic notes for the Writer
     critic_score: float                 # 0.0 – 1.0; compared to min_quality_score
     approved: bool                      # Critic's gate; True = exit loop
 
     # ---- Designer / Publisher ----
-    image_prompt: str                   # english T2I prompt produced by Designer
-    overlay_text: str                   # short Korean text composited onto image
-    image_url: str                      # URL of the final overlaid hero image
-    image_model: str                    # which T2I model produced it (A/B tag)
+    # Per-slide image_prompt and overlay_text now live inside carousel_draft items.
+    carousel_urls: list[str]            # one final public URL per rendered slide
+    image_url: str                      # cover URL alias = carousel_urls[0] (compat)
+    image_model: str                    # comma-joined A/B model tags across slides
     published: bool                     # True if Publisher hit the webhook OK
     publish_status: str                 # human-readable publish outcome
 

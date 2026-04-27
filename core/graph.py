@@ -103,7 +103,7 @@ def route_after_critic(state: GraphState) -> Literal["writer", "designer", "end"
     TODO: read `max_revision_loops` from injected pipeline_config instead of
     a hardcoded constant.
     """
-    MAX_REVISIONS_TODO = 3
+    MAX_REVISIONS_TODO = 5
     if state.get("approved"):
         return "designer"
     if state.get("revision", 0) >= MAX_REVISIONS_TODO:

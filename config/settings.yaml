@@ -112,7 +112,7 @@ profiles:
 # -----------------------------------------------------------------------------
 pipeline:
   critic:
-    max_revision_loops: 3 # hard cap on Writer <-> Critic cycles
+    max_revision_loops: 5 # hard cap on Writer <-> Critic cycles
     min_quality_score: 0.8 # Critic approves when score >= this
   publishing:
     dry_run: true # when true, skip real API posts

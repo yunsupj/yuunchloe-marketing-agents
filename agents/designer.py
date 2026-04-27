@@ -304,54 +304,89 @@ def _upload_to_supabase(png_bytes: bytes, suffix: str = "") -> str | None:
 
 
 # =============================================================================
-# Per-slide rendering
+# Per-slide rendering — photo-first, AI as absolute last resort
 # =============================================================================
 
 
-def _resolve_raw_image(slide: dict[str, Any]) -> tuple[str, str]:
-    """
-    Returns (raw_image_url, model_tag) for a single storyboard slide, or
-    ("", "") when the slide is malformed and should be skipped.
-    """
-    slide_type = slide.get("type")
-    if slide_type == "ai_generated":
-        prompt = (slide.get("image_prompt") or "").strip()
-        if not prompt:
-            return "", ""
-        return _generate_image(prompt)
-
-    if slide_type == "real_photo":
-        url = (slide.get("source_url") or "").strip()
-        if not url.startswith(("http://", "https://")):
-            return "", ""
-        return url, REAL_PHOTO_TAG
-
-    return "", ""
-
-
 def _render_slide(
-    slide: dict[str, Any], index: int
+    slide: dict[str, Any],
+    index: int,
+    raw_pool: list[str],
 ) -> tuple[str, str]:
     """
-    Returns (final_url, model_tag). Falls back to the raw URL (or mock) on
-    any rendering / upload failure so the carousel always has the right
-    number of entries.
+    Render one slide via the OG template, with strict photo-first priority:
+
+        1. Writer-curated `source_url` (any slide type that supplies one)
+        2. Next unused real photo from `raw_pool` (collector-fetched
+           `marketing_hotspots.photo_urls`)
+        3. AI generation via `_generate_image(image_prompt)`  ← LAST RESORT
+        4. Mock fallback
+
+    Each candidate is attempted through the OG renderer + Supabase upload.
+    On any failure (broken URL, OG 5xx, upload error) we fall through to
+    the next candidate. The AI image model is only invoked when no real
+    photo candidates remain or every one of them has failed — preserving
+    authenticity by default.
+
+    Mutates `raw_pool` in place: a successfully-rendered photo is removed
+    so later slides in the same carousel don't reuse it.
     """
-    raw_url, model_tag = _resolve_raw_image(slide)
-    if not raw_url:
-        return MOCK_IMAGE_URL, MOCK_MODEL_NAME
-
     overlay_text = (slide.get("overlay_text") or "").strip()
-    try:
-        png_bytes = _apply_html_template(raw_url, overlay_text)
-    except Exception as e:
-        print(f"[Designer] template apply failed for slide {index}: {e!r}")
-        return raw_url, model_tag
 
-    public_url = _upload_to_supabase(png_bytes, suffix=f"s{index}")
-    if not public_url:
-        return raw_url, model_tag
-    return public_url, model_tag
+    # Ordered candidate list. kind in {"photo", "ai"}.
+    # For "photo", payload is a URL; for "ai", payload is the image_prompt.
+    candidates: list[tuple[str, str]] = []
+
+    # 1. Writer-curated source_url (regardless of slide type — even an
+    #    "ai_generated" cover gets a real photo if the writer pre-picked one).
+    src = (slide.get("source_url") or "").strip()
+    if src.startswith(("http://", "https://")):
+        candidates.append(("photo", src))
+
+    # 2. Unused real photos from the shared pool, dedup'd against (1).
+    seen = {url for kind, url in candidates if kind == "photo"}
+    for url in raw_pool:
+        if url not in seen:
+            candidates.append(("photo", url))
+            seen.add(url)
+
+    # 3. AI generation — ABSOLUTE LAST RESORT. Only enqueued if a prompt
+    #    exists; never tried before all real photos have been exhausted.
+    image_prompt = (slide.get("image_prompt") or "").strip()
+    if image_prompt:
+        candidates.append(("ai", image_prompt))
+
+    for kind, payload in candidates:
+        if kind == "photo":
+            candidate_url = payload
+            model_tag = REAL_PHOTO_TAG
+        else:  # "ai"
+            print(
+                f"[Designer] slide {index}: real-photo candidates exhausted — "
+                "falling back to AI image generation as last resort."
+            )
+            candidate_url, model_tag = _generate_image(payload)
+            if not candidate_url:
+                continue
+
+        try:
+            png_bytes = _apply_html_template(candidate_url, overlay_text)
+        except Exception as e:
+            print(
+                f"[Designer] slide {index} {model_tag} render failed "
+                f"({candidate_url}): {e!r} — trying next candidate."
+            )
+            continue
+
+        # Mark the photo as consumed so other slides don't reuse it.
+        if kind == "photo" and candidate_url in raw_pool:
+            raw_pool.remove(candidate_url)
+
+        public_url = _upload_to_supabase(png_bytes, suffix=f"s{index}")
+        return (public_url or candidate_url), model_tag
+
+    print(f"[Designer] slide {index}: all candidates exhausted — using mock.")
+    return MOCK_IMAGE_URL, MOCK_MODEL_NAME
 
 
 # =============================================================================
@@ -369,12 +404,22 @@ def designer_node(state: dict[str, Any]) -> dict[str, Any]:
             "history": [{"node": "designer", "skipped": "no carousel_draft"}],
         }
 
+    # Shared real-photo pool across all slides. Each successful photo render
+    # consumes one entry. AI generation only fires once this pool is empty
+    # (or every remaining URL has failed to render) — authenticity over
+    # synthesis by policy.
+    raw_pool: list[str] = [
+        url for url in (state.get("raw_photo_urls") or [])
+        if isinstance(url, str) and url.startswith(("http://", "https://"))
+    ]
+    initial_pool_size = len(raw_pool)
+
     carousel_urls: list[str] = []
     model_tags: list[str] = []
     for i, slide in enumerate(carousel, start=1):
         if not isinstance(slide, dict):
             continue
-        final_url, model_tag = _render_slide(slide, i)
+        final_url, model_tag = _render_slide(slide, i, raw_pool)
         carousel_urls.append(final_url)
         if model_tag:
             model_tags.append(model_tag)
@@ -389,6 +434,11 @@ def designer_node(state: dict[str, Any]) -> dict[str, Any]:
                 "node": "designer",
                 "slide_count": len(carousel_urls),
                 "models": model_tags,
+                "raw_photos_available": initial_pool_size,
+                "raw_photos_remaining": len(raw_pool),
+                "ai_fallbacks": sum(
+                    1 for tag in model_tags if tag in (FLUX_MODEL, IMAGEN_MODEL)
+                ),
             }
         ],
     }

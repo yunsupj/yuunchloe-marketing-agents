@@ -162,6 +162,9 @@ def _build_blocks(
             }
         )
 
+    # Interactivity handler dispatches on the constant action_id and reads
+    # the marketing_posts row id from `value` — the conventional Slack pattern.
+    # block_id carries the id too as a defensive backup.
     blocks.append(
         {
             "type": "actions",
@@ -169,17 +172,17 @@ def _build_blocks(
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "Approve & Post"},
+                    "text": {"type": "plain_text", "text": "Approve & Publish"},
                     "style": "primary",
-                    "value": "approve",
-                    "action_id": f"approve_post_{post_id}",
+                    "action_id": "approve_post",
+                    "value": post_id,
                 },
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "Reject"},
                     "style": "danger",
-                    "value": "reject",
-                    "action_id": f"reject_post_{post_id}",
+                    "action_id": "reject_post",
+                    "value": post_id,
                 },
             ],
         }

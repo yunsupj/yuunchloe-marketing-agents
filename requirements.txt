@@ -7,3 +7,6 @@ requests
 google-auth
 Pillow
 supabase
+fastapi
+python-multipart
+uvicorn

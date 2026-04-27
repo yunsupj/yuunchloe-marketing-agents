@@ -214,5 +214,218 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# =============================================================================
+# Slack interactive webhook (Make.com bridge)
+# -----------------------------------------------------------------------------
+# Run this side of main.py with:
+#     uvicorn main:app --host 0.0.0.0 --port 8000
+#
+# The CLI block at the bottom is gated by `if __name__ == "__main__"` so
+# importing main as `uvicorn main:app` doesn't fire the CLI argument parser.
+# =============================================================================
+
+import json  # noqa: E402
+
+import requests  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+
+
+app = FastAPI(title="Kkaertalk Marketing Webhooks")
+
+MAKE_WEBHOOK_TIMEOUT_S = 10
+
+
+def _build_webhook_supabase_client():
+    """Lazy admin Supabase client used by the webhook handlers."""
+    try:
+        from supabase import create_client
+    except ImportError:
+        print("[webhook] supabase-py not installed.")
+        return None
+
+    url = os.getenv("EXPO_PUBLIC_SUPABASE_URL")
+    # Service-role required: the webhook writes through RLS.
+    key = (
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        or os.getenv("EXPO_PUBLIC_SUPABASE_ANON_KEY")
+    )
+    if not url or not key:
+        print("[webhook] Supabase env vars missing.")
+        return None
+
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        print(f"[webhook] Supabase client init failed: {e!r}")
+        return None
+
+
+def _slack_replacement(text: str) -> dict[str, Any]:
+    """
+    Slack message body that REPLACES the original (so the buttons disappear
+    and the approver can't double-click). Uses both `text` and a section
+    block so notifications render well across desktop / mobile / accessibility.
+    """
+    return {
+        "replace_original": True,
+        "text": text,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+        ],
+    }
+
+
+def _handle_approve(post_id: str) -> dict[str, Any]:
+    """
+    Approve flow:
+        1. Fetch draft_text + carousel_urls from Supabase.
+        2. POST {post_id, draft_text, carousel_urls} to Make.com.
+        3. If Make returns 2xx → set status='approved'.
+        4. Return a Slack message that replaces the original (no double-click).
+    """
+    client = _build_webhook_supabase_client()
+    if client is None:
+        return _slack_replacement(
+            "❌ Supabase unavailable — approval not recorded."
+        )
+
+    # 1. Fetch draft_text + carousel_urls
+    try:
+        resp = (
+            client.table("marketing_posts")
+            .select("draft_text, carousel_urls")
+            .eq("id", post_id)
+            .single()
+            .execute()
+        )
+    except Exception as e:
+        print(f"[webhook] Supabase fetch failed for {post_id}: {e!r}")
+        return _slack_replacement(
+            f"❌ Could not fetch post `{post_id}` from Supabase."
+        )
+
+    row = getattr(resp, "data", None) or {}
+    draft_text = row.get("draft_text") or ""
+    carousel_urls = row.get("carousel_urls") or []
+
+    # 2. POST to Make.com — Make handles fan-out to IG / TikTok / Reddit.
+    make_url = os.getenv("MAKE_WEBHOOK_URL")
+    if not make_url:
+        return _slack_replacement(
+            "❌ `MAKE_WEBHOOK_URL` not configured — cannot publish."
+        )
+
+    payload = {
+        "post_id": post_id,
+        "draft_text": draft_text,
+        "carousel_urls": carousel_urls,
+    }
+    try:
+        make_resp = requests.post(
+            make_url,
+            json=payload,
+            timeout=MAKE_WEBHOOK_TIMEOUT_S,
+        )
+    except requests.RequestException as e:
+        print(f"[webhook] Make.com POST failed: {e!r}")
+        return _slack_replacement(
+            f"❌ Make.com webhook unreachable: `{e}`"
+        )
+
+    if not make_resp.ok:
+        return _slack_replacement(
+            f"❌ Make.com returned `{make_resp.status_code}` — "
+            "approval rolled back."
+        )
+
+    # 3. Update status — only on confirmed Make 2xx.
+    try:
+        (
+            client.table("marketing_posts")
+            .update({"status": "approved"})
+            .eq("id", post_id)
+            .execute()
+        )
+    except Exception as e:
+        # Make has already accepted the job — don't roll back the publish.
+        # Just surface the bookkeeping issue so it can be backfilled manually.
+        print(f"[webhook] status update failed for {post_id}: {e!r}")
+        return _slack_replacement(
+            f"⚠️ Sent to Make.com (HTTP {make_resp.status_code}) but failed "
+            f"to mark `{post_id}` as approved in Supabase: `{e}`"
+        )
+
+    # 4. Replace original Slack message — buttons disappear so no double-click.
+    return _slack_replacement(
+        f"✅ Post approved! Sent to Make.com for publishing.\n"
+        f"_Post ID: `{post_id}`_"
+    )
+
+
+def _handle_reject(post_id: str) -> dict[str, Any]:
+    """Reject flow: flip status to 'rejected', no Make.com call."""
+    client = _build_webhook_supabase_client()
+    if client is not None:
+        try:
+            (
+                client.table("marketing_posts")
+                .update({"status": "rejected"})
+                .eq("id", post_id)
+                .execute()
+            )
+        except Exception as e:
+            print(f"[webhook] reject update failed for {post_id}: {e!r}")
+            return _slack_replacement(
+                f"⚠️ Couldn't mark `{post_id}` as rejected: `{e}`"
+            )
+    return _slack_replacement(f"🚫 Post `{post_id}` rejected — not published.")
+
+
+@app.post("/api/webhooks/slack-interactive")
+async def slack_interactive(request: Request) -> dict[str, Any]:
+    """
+    Slack interactive endpoint. Slack POSTs application/x-www-form-urlencoded
+    with a single `payload` field carrying the JSON action context.
+
+    Dispatches on `action_id` ∈ {"approve_post", "reject_post"} (constant per
+    publisher.py spec) and reads the marketing_posts row id from `value`.
+
+    TODO: verify the Slack signing secret on `X-Slack-Signature` /
+    `X-Slack-Request-Timestamp` before processing, otherwise anyone who
+    discovers the URL can fake button clicks.
+    """
+    form = await request.form()
+    raw_payload = form.get("payload")
+    if not raw_payload:
+        raise HTTPException(status_code=400, detail="missing payload")
+
+    try:
+        payload = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON payload")
+
+    actions = payload.get("actions") or []
+    if not actions:
+        return _slack_replacement("⚠️ No action received.")
+
+    action = actions[0]
+    action_id = action.get("action_id", "")
+    post_id = (action.get("value") or "").strip()
+
+    if not post_id:
+        return _slack_replacement("⚠️ Missing post_id on the action.")
+
+    if action_id == "approve_post":
+        return _handle_approve(post_id)
+    if action_id == "reject_post":
+        return _handle_reject(post_id)
+    return _slack_replacement(f"⚠️ Unknown action_id: `{action_id}`")
+
+
+# =============================================================================
+# CLI entry — kept last so `uvicorn main:app` import doesn't trigger argparse.
+# =============================================================================
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

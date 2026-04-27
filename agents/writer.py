@@ -1,11 +1,17 @@
 """
-Writer agent: produces a 3-slide carousel storyboard for the active app/region.
+Writer agent: produces a 4-slide carousel storyboard for the active app/region.
 
 Two roles in one call:
     1. Vision Curator — sees the real photos in `state['raw_photo_urls']`
-       (passed as image inputs in the HumanMessage) and picks the best 2.
+       (passed as image inputs in the HumanMessage) and picks the best 3
+       for slides 1, 2, 3.
     2. Copywriter — writes per-slide overlay_text in the active profile's
        persona/tone (sourced from settings.yaml brand_voice).
+
+Slide 4 is always a hardcoded `app_promo` card (logo + CTA). Slides 1–3 must
+reference URLs from `raw_photo_urls`; the post-parse validator rejects any
+hallucinated `source_url` and substitutes from the real-photo pool to defend
+against the LLM occasionally inventing fake unsplash/pexels links.
 
 Output is a JSON array stored in `state['carousel_draft']`. A flat textual
 view is also stored in `state['draft']` (joined overlay_texts) so the
@@ -32,6 +38,15 @@ from prompts.writer_prompt import (
 # Cap how many image_url parts we shove into the request so we don't blow up
 # token / per-request image limits on a long hotspot photo list.
 MAX_VISION_IMAGES = 6
+
+# Carousel structure constants — kept in lockstep with prompts/writer_prompt.py.
+EXPECTED_SLIDE_COUNT = 4
+REAL_PHOTO_SLIDE_COUNT = 3   # slides 1, 2, 3 must be real_photo
+APP_PROMO_LOGO_URL = (
+    "https://aaicoyblsmdjoqmykivx.supabase.co/storage/v1/object/"
+    "public/marketing-assets/logo/logo.png"
+)
+DEFAULT_APP_PROMO_OVERLAY = "우리 동네 진짜 정보, 깨알톡에서"
 
 
 def _build_llm() -> ChatOpenAI:
@@ -120,14 +135,20 @@ def _build_human_message(state: dict[str, Any]) -> HumanMessage:
     ]
     if photo_urls:
         instruction_lines.append(
-            f"첨부된 {len(photo_urls)}장의 실제 사진을 직접 보고, 그 중 best 2장을 골라 "
-            "slide 2 / slide 3 의 source_url 에 정확히 그대로 적어라. "
-            "URL 을 변형하지 말고, 흐릿하거나 주제와 무관해 보이는 사진은 절대 고르지 마라."
+            f"첨부된 {len(photo_urls)}장의 실제 사진을 직접 보고, 그 중 best 3장을 골라 "
+            "slide 1 / slide 2 / slide 3 의 source_url 에 정확히 그대로 적어라. "
+            "URL 을 변형하거나 단축하지 말고, 흐릿하거나 주제와 무관해 보이는 사진은 절대 고르지 마라. "
+            "🚨 source_url 은 반드시 첨부된 목록 중 하나여야 한다 — unsplash.com, pexels.com, "
+            "googleusercontent.com 등 첨부되지 않은 URL 을 발명하면 자동 reject 된다. "
+            "사진이 3장 미만이면 같은 URL 을 재사용해도 된다 (발명은 절대 금지). "
+            "Slide 4 는 무조건 app_promo 로, source_url 은 제공된 logo URL 을 글자 그대로 사용해라."
         )
     else:
         instruction_lines.append(
-            "첨부된 raw photo가 없다. 3장 모두 type='ai_generated' 슬라이드로 채워라. "
-            "이 경우 source_url 키는 출력하지 말고 image_prompt + overlay_text 만 채워라."
+            "첨부된 raw photo 가 없다. Slide 1, 2, 3 은 모두 type='ai_generated' 로 채우고 "
+            "source_url 키는 출력하지 말고 image_prompt + overlay_text 만 채워라. "
+            "이 경우에도 가짜 URL 은 절대 만들지 마라. "
+            "Slide 4 는 무조건 app_promo 로 logo URL 을 그대로 사용해라."
         )
     text_part = "\n".join(line for line in instruction_lines if line is not None).strip()
 
@@ -148,50 +169,73 @@ def _strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
+def _make_real_photo_slide(
+    idx: int,
+    unused_pool: list[str],
+    all_photos: list[str],
+    overlay: str,
+) -> dict[str, Any]:
+    """
+    Build a single real_photo slide. Prefers an unused photo from the pool
+    (mutates by popping); reuses an existing photo if the pool is exhausted
+    but we still have *any* real photos; degrades to ai_generated only when
+    `all_photos` is completely empty. NEVER invents a URL.
+    """
+    if unused_pool:
+        url = unused_pool.pop(0)
+        return {"slide": idx, "type": "real_photo", "source_url": url, "overlay_text": overlay}
+    if all_photos:
+        # Reuse-by-index — better than fabricating. Anti-hallucination policy:
+        # duplication is acceptable; invented URLs are not.
+        url = all_photos[(idx - 1) % len(all_photos)]
+        return {"slide": idx, "type": "real_photo", "source_url": url, "overlay_text": overlay}
+    return {
+        "slide": idx,
+        "type": "ai_generated",
+        "image_prompt": (
+            "Cinematic editorial local photography, soft natural light, "
+            "large negative space for headline overlay, no text in frame."
+        ),
+        "overlay_text": overlay,
+    }
+
+
+def _make_app_promo_slide(overlay: str = "") -> dict[str, Any]:
+    return {
+        "slide": EXPECTED_SLIDE_COUNT,
+        "type": "app_promo",
+        "source_url": APP_PROMO_LOGO_URL,
+        "overlay_text": overlay.strip() or DEFAULT_APP_PROMO_OVERLAY,
+    }
+
+
 def _fallback_carousel(photo_urls: list[str]) -> list[dict[str, Any]]:
     """
-    If JSON parse fails, build something usable rather than crashing the
-    pipeline: AI cover + as many real_photo slides as we have URLs, padded
-    with extra ai_generated slides up to 3 total.
+    Build a usable 4-slide carousel when JSON parse fails entirely: slides
+    1-3 from `photo_urls` (reusing or padding with ai_generated only if no
+    photos exist at all), slide 4 always the hardcoded app_promo.
     """
+    unused_pool = list(photo_urls)
     slides: list[dict[str, Any]] = [
-        {
-            "slide": 1,
-            "type": "ai_generated",
-            "image_prompt": (
-                "Cinematic editorial photography of a Korean-American "
-                "neighborhood scene at golden hour, large negative space, "
-                "35mm, shallow depth of field, warm color grading, "
-                "lifestyle magazine aesthetic, no text in frame."
-            ),
-            "overlay_text": "이번주 동네 핫플",
-        }
+        _make_real_photo_slide(i, unused_pool, photo_urls, "")
+        for i in range(1, REAL_PHOTO_SLIDE_COUNT + 1)
     ]
-    for i, url in enumerate(photo_urls[:2], start=2):
-        slides.append(
-            {
-                "slide": i,
-                "type": "real_photo",
-                "source_url": url,
-                "overlay_text": "",
-            }
-        )
-    while len(slides) < 3:
-        slides.append(
-            {
-                "slide": len(slides) + 1,
-                "type": "ai_generated",
-                "image_prompt": (
-                    "Editorial lifestyle photo, soft natural light, "
-                    "negative space for headline, no text in frame."
-                ),
-                "overlay_text": "",
-            }
-        )
+    slides.append(_make_app_promo_slide())
     return slides
 
 
 def _coerce_carousel(raw: str, photo_urls: list[str]) -> list[dict[str, Any]]:
+    """
+    Parse the LLM JSON, then enforce the 4-slide invariant with strict
+    anti-hallucination guards:
+        - slides 1-3 must be real_photo (or ai_generated only if no photos)
+        - any source_url not present in `photo_urls` is rejected and
+          replaced with one from the pool — never trusted from the model
+        - slide 4 is always overwritten with the hardcoded app_promo logo
+
+    The model can technically return any garbage; this function ensures the
+    downstream Designer never sees an invented unsplash/pexels URL.
+    """
     cleaned = _strip_markdown_fences(raw)
     data: Any = None
     try:
@@ -208,23 +252,47 @@ def _coerce_carousel(raw: str, photo_urls: list[str]) -> list[dict[str, Any]]:
         print("[Writer] JSON parse failed — using fallback carousel.")
         return _fallback_carousel(photo_urls)
 
+    photo_set = set(photo_urls)
+    unused_pool = list(photo_urls)
     cleaned_slides: list[dict[str, Any]] = []
-    for i, item in enumerate(data, start=1):
-        if not isinstance(item, dict):
-            continue
-        slide = {
-            "slide": item.get("slide", i),
-            "type": item.get("type") or "ai_generated",
-            "overlay_text": (item.get("overlay_text") or "").strip(),
-        }
-        if slide["type"] == "real_photo":
-            slide["source_url"] = (item.get("source_url") or "").strip()
-        else:
-            slide["image_prompt"] = (item.get("image_prompt") or "").strip()
-        cleaned_slides.append(slide)
 
-    if not cleaned_slides:
-        return _fallback_carousel(photo_urls)
+    # Process up to (EXPECTED_SLIDE_COUNT - 1) slides as real_photo candidates.
+    # Slide 4 is always rebuilt at the end regardless of what the model said.
+    raw_slides_for_photos = [
+        item for item in data[: EXPECTED_SLIDE_COUNT - 1] if isinstance(item, dict)
+    ]
+
+    for i in range(1, REAL_PHOTO_SLIDE_COUNT + 1):
+        item = raw_slides_for_photos[i - 1] if i - 1 < len(raw_slides_for_photos) else {}
+        overlay = (item.get("overlay_text") or "").strip()
+        src = (item.get("source_url") or "").strip()
+
+        if src and src in photo_set:
+            # Valid — model picked a URL that's in the attached pool.
+            if src in unused_pool:
+                unused_pool.remove(src)
+            cleaned_slides.append(
+                {"slide": i, "type": "real_photo", "source_url": src, "overlay_text": overlay}
+            )
+        else:
+            if src:
+                # The model invented a URL or copied one not in the attached set.
+                # Reject it and substitute from the real-photo pool.
+                print(
+                    f"[Writer] slide {i}: rejected hallucinated source_url "
+                    f"({src!r}) — substituting from raw_photo_urls."
+                )
+            cleaned_slides.append(
+                _make_real_photo_slide(i, unused_pool, photo_urls, overlay)
+            )
+
+    # Slide 4 — always the hardcoded app_promo. If the model returned an
+    # overlay_text for slide 4, preserve it; otherwise use the default.
+    promo_overlay = ""
+    if len(data) >= EXPECTED_SLIDE_COUNT and isinstance(data[EXPECTED_SLIDE_COUNT - 1], dict):
+        promo_overlay = (data[EXPECTED_SLIDE_COUNT - 1].get("overlay_text") or "").strip()
+    cleaned_slides.append(_make_app_promo_slide(promo_overlay))
+
     return cleaned_slides
 
 

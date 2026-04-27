@@ -35,13 +35,16 @@ def _build_llm() -> ChatOpenAI:
             model="gpt-4o-mini",  # pinned: matches writer for consistent grading
             temperature=0.2,
             api_key=openai_key,
+            # Tenacity-backed exponential backoff on 429 / transient 5xx —
+            # essential because Writer↔Critic loops can hammer TPM quickly.
+            max_retries=5,
         )
 
     qwen_key = os.getenv("QWEN_API_KEY")
     base_url = os.getenv("QWEN_BASE_URL")
     model = os.getenv("QWEN_MODEL_NAME", "qwen3.5-flash")
 
-    kwargs: dict[str, Any] = {"model": model, "temperature": 0.2}
+    kwargs: dict[str, Any] = {"model": model, "temperature": 0.2, "max_retries": 5}
     if qwen_key:
         kwargs["api_key"] = qwen_key
     if base_url:

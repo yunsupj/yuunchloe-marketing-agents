@@ -23,7 +23,7 @@ import random
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote_plus
 
 import requests
 
@@ -224,12 +224,26 @@ def _apply_html_template(image_url: str, text: str) -> bytes:
     Render the final slide image by calling the external Next.js Vercel OG
     image-generation engine. Returns the rendered PNG bytes.
 
+    URL-encoding strategy:
+        Both `image_url` and `text` are passed through `quote_plus`, which
+        percent-encodes EVERY character that's special in a URL query
+        string — `?`, `&`, `=`, `:`, `/`, `#`, etc. This is critical for
+        Google Places photo URLs, whose own internal `&maxwidth=...&key=...`
+        chains would otherwise be misparsed by Vercel/Next.js as additional
+        query parameters and truncate the `image` value at the first inner
+        `&`, causing the OG endpoint to render a black/empty image.
+
+        With `quote_plus`, the entire Google URL nests cleanly as the value
+        of the outer `image=` parameter and `nextUrl.searchParams.get("image")`
+        on the Vercel side returns the full original URL after exactly one
+        decode pass.
+
     On failure, the exception is logged and re-raised so `_render_slide` can
-    fall back to the raw image URL.
+    fall back to the next image candidate.
     """
-    og_base_url = os.getenv("OG_BASE_URL", "http://localhost:3000")
-    encoded_img = quote(image_url, safe="")
-    encoded_text = quote(text, safe="")
+    og_base_url = os.getenv("OG_BASE_URL", "http://localhost:3000").rstrip("/")
+    encoded_img = quote_plus(image_url)
+    encoded_text = quote_plus(text)
     endpoint = f"{og_base_url}/api/og?image={encoded_img}&text={encoded_text}"
 
     try:

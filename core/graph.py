@@ -11,6 +11,7 @@ Design principles:
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -93,12 +94,22 @@ class GraphState(TypedDict, total=False):
 # =============================================================================
 
 
+REVISION_LOOP_BACKOFF_SECONDS = 30
+
+
 def route_after_critic(state: GraphState) -> Literal["writer", "designer", "end"]:
     """
     Conditional edge after Critic:
         - approved        -> designer (proceed to visual + publish)
         - max revs hit    -> end      (give up; no publish on a failed draft)
-        - otherwise       -> writer   (loop with feedback)
+        - otherwise       -> writer   (loop with feedback, after a sleep)
+
+    Rate-limit guard: a single Writer↔Critic round-trip burns ~130k tokens
+    against OpenAI's 200k TPM ceiling, so two back-to-back revisions trip
+    a 429. We sleep for REVISION_LOOP_BACKOFF_SECONDS before re-entering
+    the Writer to give the per-minute token bucket time to refill. This is
+    a background job — execution time doesn't matter, but staying inside
+    the rate limit does.
 
     TODO: read `max_revision_loops` from injected pipeline_config instead of
     a hardcoded constant.
@@ -108,6 +119,14 @@ def route_after_critic(state: GraphState) -> Literal["writer", "designer", "end"
         return "designer"
     if state.get("revision", 0) >= MAX_REVISIONS_TODO:
         return "end"
+
+    print(
+        f"[graph] Critic rejected draft "
+        f"(revision={state.get('revision', 0)}, score={state.get('critic_score')}); "
+        f"sleeping {REVISION_LOOP_BACKOFF_SECONDS}s before next Writer pass to "
+        f"avoid 429 TPM throttle."
+    )
+    time.sleep(REVISION_LOOP_BACKOFF_SECONDS)
     return "writer"
 
 

@@ -46,13 +46,17 @@ def _build_llm() -> ChatOpenAI:
             model="gpt-4o-mini",
             temperature=0.7,
             api_key=openai_key,
+            # LangChain wraps each call in tenacity; on 429 it sleeps with
+            # exponential backoff (≈ 4s, 8s, 16s, 32s, 64s) before giving up,
+            # which keeps the Writer↔Critic loop alive through TPM throttling.
+            max_retries=5,
         )
 
     qwen_key = os.getenv("QWEN_API_KEY")
     base_url = os.getenv("QWEN_BASE_URL")
     model = os.getenv("QWEN_MODEL_NAME", "qwen3.5-flash")
 
-    kwargs: dict[str, Any] = {"model": model, "temperature": 0.7}
+    kwargs: dict[str, Any] = {"model": model, "temperature": 0.7, "max_retries": 5}
     if qwen_key:
         kwargs["api_key"] = qwen_key
     if base_url:

@@ -48,6 +48,37 @@ APP_PROMO_LOGO_URL = (
 )
 DEFAULT_APP_PROMO_OVERLAY = "우리 동네 진짜 정보, 깨알톡에서"
 
+# Allowed values for the dynamic orange-pill category badge on slides 1-3.
+# Kept in lockstep with prompts/writer_prompt.py [Content Category Badge].
+CATEGORY_DINING = "DINING * LOCAL PICK"
+CATEGORY_PLACES = "PLACES * LOCAL PICK"
+CATEGORY_CHATTER = "NEIGHBORHOOD CHATTER"
+ALLOWED_CONTENT_CATEGORIES = frozenset(
+    {CATEGORY_DINING, CATEGORY_PLACES, CATEGORY_CHATTER}
+)
+DEFAULT_CONTENT_CATEGORY = CATEGORY_CHATTER
+
+
+def _normalize_content_category(value: Any) -> str:
+    """
+    Coerce the model's `content_category` into one of the three allowed pill
+    values. Accepts minor casing/whitespace variation; falls back to
+    NEIGHBORHOOD CHATTER on anything unrecognized so the downstream renderer
+    never sees the legacy hardcoded "주민 인증" or invented copy.
+    """
+    if not isinstance(value, str):
+        return DEFAULT_CONTENT_CATEGORY
+    normalized = " ".join(value.strip().upper().split())
+    if normalized in ALLOWED_CONTENT_CATEGORIES:
+        return normalized
+    if "DINING" in normalized:
+        return CATEGORY_DINING
+    if "PLACES" in normalized:
+        return CATEGORY_PLACES
+    if "CHATTER" in normalized or "NEIGHBORHOOD" in normalized:
+        return CATEGORY_CHATTER
+    return DEFAULT_CONTENT_CATEGORY
+
 
 def _build_llm() -> ChatOpenAI:
     """
@@ -174,28 +205,46 @@ def _make_real_photo_slide(
     unused_pool: list[str],
     all_photos: list[str],
     overlay: str,
+    content_category: str = DEFAULT_CONTENT_CATEGORY,
 ) -> dict[str, Any]:
     """
     Build a single real_photo slide. Prefers an unused photo from the pool
     (mutates by popping); reuses an existing photo if the pool is exhausted
     but we still have *any* real photos; degrades to ai_generated only when
     `all_photos` is completely empty. NEVER invents a URL.
+
+    `content_category` is the dynamic orange-pill badge text — must already
+    be a member of ALLOWED_CONTENT_CATEGORIES.
     """
     if unused_pool:
         url = unused_pool.pop(0)
-        return {"slide": idx, "type": "real_photo", "source_url": url, "overlay_text": overlay}
+        return {
+            "slide": idx,
+            "type": "real_photo",
+            "source_url": url,
+            "content_category": content_category,
+            "overlay_text": overlay,
+        }
     if all_photos:
         # Reuse-by-index — better than fabricating. Anti-hallucination policy:
         # duplication is acceptable; invented URLs are not.
         url = all_photos[(idx - 1) % len(all_photos)]
-        return {"slide": idx, "type": "real_photo", "source_url": url, "overlay_text": overlay}
+        return {
+            "slide": idx,
+            "type": "real_photo",
+            "source_url": url,
+            "content_category": content_category,
+            "overlay_text": overlay,
+        }
     return {
         "slide": idx,
         "type": "ai_generated",
         "image_prompt": (
             "Cinematic editorial local photography, soft natural light, "
-            "large negative space for headline overlay, no text in frame."
+            "subject placed in upper two-thirds, lower third left intentionally "
+            "clean for headline overlay, no text in frame, 100% opacity."
         ),
+        "content_category": content_category,
         "overlay_text": overlay,
     }
 
@@ -217,7 +266,9 @@ def _fallback_carousel(photo_urls: list[str]) -> list[dict[str, Any]]:
     """
     unused_pool = list(photo_urls)
     slides: list[dict[str, Any]] = [
-        _make_real_photo_slide(i, unused_pool, photo_urls, "")
+        _make_real_photo_slide(
+            i, unused_pool, photo_urls, "", DEFAULT_CONTENT_CATEGORY
+        )
         for i in range(1, REAL_PHOTO_SLIDE_COUNT + 1)
     ]
     slides.append(_make_app_promo_slide())
@@ -267,12 +318,28 @@ def _coerce_carousel(raw: str, photo_urls: list[str]) -> list[dict[str, Any]]:
         overlay = (item.get("overlay_text") or "").strip()
         src = (item.get("source_url") or "").strip()
 
+        # Dynamic orange-pill category badge. Normalize so the legacy hardcoded
+        # "주민 인증" / random LLM strings can never reach the renderer.
+        raw_category = item.get("content_category")
+        category = _normalize_content_category(raw_category)
+        if isinstance(raw_category, str) and raw_category.strip() and category != raw_category.strip():
+            print(
+                f"[Writer] slide {i}: content_category {raw_category!r} "
+                f"normalized to {category!r}."
+            )
+
         if src and src in photo_set:
             # Valid — model picked a URL that's in the attached pool.
             if src in unused_pool:
                 unused_pool.remove(src)
             cleaned_slides.append(
-                {"slide": i, "type": "real_photo", "source_url": src, "overlay_text": overlay}
+                {
+                    "slide": i,
+                    "type": "real_photo",
+                    "source_url": src,
+                    "content_category": category,
+                    "overlay_text": overlay,
+                }
             )
         else:
             if src:
@@ -283,7 +350,9 @@ def _coerce_carousel(raw: str, photo_urls: list[str]) -> list[dict[str, Any]]:
                     f"({src!r}) — substituting from raw_photo_urls."
                 )
             cleaned_slides.append(
-                _make_real_photo_slide(i, unused_pool, photo_urls, overlay)
+                _make_real_photo_slide(
+                    i, unused_pool, photo_urls, overlay, category
+                )
             )
 
     # Slide 4 — always the hardcoded app_promo. If the model returned an

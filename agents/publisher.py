@@ -30,6 +30,14 @@ SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 # Slack section text caps at 3000 chars; leave headroom for our wrapper text.
 _SLACK_TEXT_BUDGET = 2500
 
+REGION_TO_SUBREDDITS: dict[str, list[str]] = {
+    "la_oc":  ["LosAngeles", "orangecounty", "AskLosAngeles", "FoodLosAngeles", "SouthBayLA", "irvine", "longbeach", "SGV", "Pasadena", "ucla", "USC", "LAlist", "Melrose", "BeverlyHills", "SantaMonica", "Anaheim", "IrvineClassifieds"],
+    "sf_bay": ["bayarea", "sanfrancisco", "SFBayArea"],
+    "nyc":    ["nyc", "newyorkcity"],
+    "seattle": ["Seattle", "seattlewa"],
+    "chicago": ["chicago"],
+}
+
 
 # =============================================================================
 # Supabase client (lazy, same shape as auto_scheduler / designer)
@@ -96,18 +104,20 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _insert_pending_row(
-    client, topic: str, draft: str, carousel_urls: list[str]
+    client, topic: str, draft: str, carousel_urls: list[str], subreddits: list[str]
 ) -> str | None:
     """
     Insert a row into `marketing_posts` and return the new row's id (as str)
     or None on failure. `carousel_urls` is stored as an array (Postgres
     TEXT[] / JSONB) so each slide URL is independently addressable from the
-    approval handler and downstream publisher.
+    approval handler and downstream publisher. `subreddits` carries the
+    region-mapped target subreddit list for the Make.com publishing step.
     """
     payload = {
         "topic": topic,
         "draft_text": draft,
         "carousel_urls": carousel_urls,
+        "subreddits": subreddits,
         "status": "pending",
     }
     try:
@@ -238,6 +248,10 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
     ]
     topic = _extract_topic(state)
 
+    target_region = state.get("target_region") or {}
+    region_id = target_region.get("id") or ""
+    subreddits = REGION_TO_SUBREDDITS.get(region_id) or REGION_TO_SUBREDDITS.get("la_oc", [])
+
     bot_token = os.getenv("SLACK_BOT_TOKEN")
     channel = os.getenv("SLACK_APPROVAL_CHANNEL_ID")
 
@@ -254,7 +268,7 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    post_id = _insert_pending_row(client, topic, draft, carousel_urls)
+    post_id = _insert_pending_row(client, topic, draft, carousel_urls, subreddits)
     if post_id is None:
         return {
             "published": False,

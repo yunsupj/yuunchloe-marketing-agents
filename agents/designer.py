@@ -37,6 +37,11 @@ REAL_PHOTO_TAG = "real_photo"
 FLUX_MODEL = "flux-2-pro"
 IMAGEN_MODEL = "imagen-4-ultra"
 
+# Fallback for the dynamic orange-pill category badge when a slide is missing
+# the field (e.g. legacy carousels or the hardcoded app_promo). Kept in lockstep
+# with agents/writer.py::DEFAULT_CONTENT_CATEGORY.
+DEFAULT_CONTENT_CATEGORY = "NEIGHBORHOOD CHATTER"
+
 
 # =============================================================================
 # Provider availability
@@ -219,24 +224,20 @@ def _generate_image(prompt: str) -> tuple[str, str]:
 # =============================================================================
 
 
-def _apply_html_template(image_url: str, text: str) -> bytes:
+def _apply_html_template(image_url: str, text: str, category: str) -> bytes:
     """
     Render the final slide image by calling the external Next.js Vercel OG
     image-generation engine. Returns the rendered PNG bytes.
 
     URL-encoding strategy:
-        Both `image_url` and `text` are passed through `quote_plus`, which
+        `image_url`, `text`, and `category` all go through `quote_plus`, which
         percent-encodes EVERY character that's special in a URL query
-        string — `?`, `&`, `=`, `:`, `/`, `#`, etc. This is critical for
-        Google Places photo URLs, whose own internal `&maxwidth=...&key=...`
-        chains would otherwise be misparsed by Vercel/Next.js as additional
-        query parameters and truncate the `image` value at the first inner
-        `&`, causing the OG endpoint to render a black/empty image.
-
-        With `quote_plus`, the entire Google URL nests cleanly as the value
-        of the outer `image=` parameter and `nextUrl.searchParams.get("image")`
-        on the Vercel side returns the full original URL after exactly one
-        decode pass.
+        string — `?`, `&`, `=`, `:`, `/`, `#`, `*`, space, etc. This is
+        critical for Google Places photo URLs (whose own internal
+        `&maxwidth=...&key=...` chains would otherwise be misparsed) and for
+        the category pill values like "DINING * LOCAL PICK" whose `*` and
+        spaces must be encoded so the OG endpoint receives the literal
+        string after one decode pass.
 
     On failure, the exception is logged and re-raised so `_render_slide` can
     fall back to the next image candidate.
@@ -244,7 +245,11 @@ def _apply_html_template(image_url: str, text: str) -> bytes:
     og_base_url = os.getenv("OG_BASE_URL", "http://localhost:3000").rstrip("/")
     encoded_img = quote_plus(image_url)
     encoded_text = quote_plus(text)
-    endpoint = f"{og_base_url}/api/og?image={encoded_img}&text={encoded_text}"
+    encoded_category = quote_plus(category)
+    endpoint = (
+        f"{og_base_url}/api/og"
+        f"?image={encoded_img}&text={encoded_text}&category={encoded_category}"
+    )
 
     try:
         resp = requests.get(endpoint, timeout=20)
@@ -346,6 +351,7 @@ def _render_slide(
     so later slides in the same carousel don't reuse it.
     """
     overlay_text = (slide.get("overlay_text") or "").strip()
+    category = slide.get("content_category") or DEFAULT_CONTENT_CATEGORY
 
     # Ordered candidate list. kind in {"photo", "ai"}.
     # For "photo", payload is a URL; for "ai", payload is the image_prompt.
@@ -384,7 +390,7 @@ def _render_slide(
                 continue
 
         try:
-            png_bytes = _apply_html_template(candidate_url, overlay_text)
+            png_bytes = _apply_html_template(candidate_url, overlay_text, category)
         except Exception as e:
             print(
                 f"[Designer] slide {index} {model_tag} render failed "

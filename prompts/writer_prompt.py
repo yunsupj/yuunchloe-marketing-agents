@@ -262,13 +262,23 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
   Beverly Hills, Santa Monica 등)을 양 언어 모두에서 자연스럽게 인용.
 - 한영 코드스위칭은 KO 슬라이드에서만 / EN 슬라이드는 native English 유지.
 
+[OG Image Category Tag]
+- [Local Research Notes]의 내용을 분석하여 장소나 콘텐츠의 성격에 맞는 태그를 생성해라.
+- 식당/음식점인 경우: "맛집 · LOCAL PICK"
+- 카페/베이커리인 경우: "카페 · LOCAL PICK"
+- 해변/바다인 경우: "BEACH · LOCAL PICK"
+- 공원/자연/등산로인 경우: "공원 · LOCAL PICK"
+- 장소가 아닌 일반적인 동네 수다/질문 글인 경우: "깨알수다 · LOCAL"
+- 그 외의 장소라면 가장 잘 어울리는 단어(최대 3글자)를 조합해 "[단어] · LOCAL PICK" 형식으로 만들어라.
+
 [Output Format — STRICT JSON OBJECT (NOT a list)]
 순수 JSON 객체만 출력해라. 마크다운 코드 펜스(```), 설명, 인사말, preamble
 일체 금지. 응답의 첫 글자는 `{{`, 마지막 글자는 `}}` 여야 한다.
 
-스키마 (정확히 이 6 개 키):
+스키마 (정확히 이 7 개 키):
 {{
   "_internal_monologue": "<추상적인 형용사('아름다운', '다양한', '특별한')를 절대 쓰지 않겠다고 다짐해라. 대신 Research Notes에서 어떤 **구체적인 팩트와 명사**(예: 네온 사인, AYCE, 주차 공간 등) 3가지를 뽑아 본문에 넣을 것인지 브리핑해라.>",
+  "og_category_tag": "<[OG Image Category Tag] 규칙에 따라 생성된 태그 (예: 맛집 · LOCAL PICK)>",
   "carousel_ko": [
     {{
       "slide_number": 1,
@@ -326,7 +336,7 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
   "caption_en": "<EN Reddit profile-post caption, 1-2 paragraphs, no hashtags>"
 }}
 
-⚠️ 모든 6 개 키 필수 (_internal_monologue 포함). carousel_ko / carousel_en 은 정확히 4 개 슬라이드. slide_number
+⚠️ 모든 7 개 키 필수 (_internal_monologue, og_category_tag 포함). carousel_ko / carousel_en 은 정확히 4 개 슬라이드. slide_number
 는 1·2·3·4 순서. 누락 / 다른 키 / 추가 키 / list-of-slides 만 출력 → 자동 reject.
 
 자, [Persona]/[Tone]에 정확히 맞춰 bilingual JSON object 를 뽑아라."""
@@ -348,7 +358,7 @@ The Critic reviewed your draft section by section.
 4. After applying fixes, output the full 6-key JSON OBJECT unchanged except for the
    corrected sections. Do NOT change sections that received "Pass".
 
-출력 형식은 동일하게 6-키 JSON OBJECT (_internal_monologue / carousel_ko / carousel_en /
+출력 형식은 동일하게 7-키 JSON OBJECT (_internal_monologue / og_category_tag / carousel_ko / carousel_en /
 reddit_promo_text / caption_ko / caption_en). list 만 출력하지 마라.
 """
 

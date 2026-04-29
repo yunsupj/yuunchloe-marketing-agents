@@ -267,6 +267,7 @@ def _fallback_payload() -> dict[str, Any]:
         "reddit_promo_text": "",
         "caption_ko": "",
         "caption_en": "",
+        "og_category_tag": "",
     }
 
 
@@ -275,9 +276,9 @@ def _coerce_payload(raw: str) -> dict[str, Any]:
     Parse the LLM JSON object and return a fully-validated bilingual payload.
 
     Validation guarantees:
-        - top-level result is a dict with all 5 keys present
+        - top-level result is a dict with all 7 keys present
         - carousel_ko / carousel_en are lists of EXACTLY 4 normalized slides
-        - reddit_promo_text / caption_ko / caption_en are strings
+        - reddit_promo_text / caption_ko / caption_en / og_category_tag are strings
     """
     cleaned = _strip_markdown_fences(raw)
     data: Any = None
@@ -301,6 +302,7 @@ def _coerce_payload(raw: str) -> dict[str, Any]:
     reddit_promo = data.get("reddit_promo_text")
     caption_ko = data.get("caption_ko")
     caption_en = data.get("caption_en")
+    og_category_tag = data.get("og_category_tag")
 
     return {
         "carousel_ko": carousel_ko,
@@ -308,6 +310,7 @@ def _coerce_payload(raw: str) -> dict[str, Any]:
         "reddit_promo_text": reddit_promo if isinstance(reddit_promo, str) else "",
         "caption_ko": caption_ko if isinstance(caption_ko, str) else "",
         "caption_en": caption_en if isinstance(caption_en, str) else "",
+        "og_category_tag": og_category_tag if isinstance(og_category_tag, str) else "",
     }
 
 
@@ -356,6 +359,7 @@ def writer_node(state: dict[str, Any]) -> dict[str, Any]:
         "reddit_promo_text": payload["reddit_promo_text"],
         "caption_ko": payload["caption_ko"],
         "caption_en": payload["caption_en"],
+        "og_category_tag": payload["og_category_tag"],
         "revision": revision,
         "history": [
             {

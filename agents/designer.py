@@ -1,18 +1,18 @@
 """
-Designer agent: render each slide of the carousel storyboard.
+Designer agent: render every slide of BOTH bilingual carousel tracks.
 
-Pipeline per slide:
-    1. ai_generated -> _generate_image(slide["image_prompt"])
-       real_photo   -> use slide["source_url"]
-    2. _apply_html_template(image_url, overlay_text) -> bytes
-       (placeholder; later this calls Bannerbear or a similar HTML→image
-       renderer so overlay_text is laid out by a designed template instead
-       of PIL.)
+Per-slide pipeline (run once for KO, once for EN):
+    1. Real photo (`source_url` or shared `raw_pool`) -> preferred
+       photo_instruction -> AI-generated only if all real photos exhausted
+    2. _apply_html_template(image_url, title+description, category)
+       calls the external Vercel OG endpoint to compose the final slide PNG.
     3. Upload bytes to the Supabase `marketing-assets` bucket.
     4. Collect the public HTTPS URL.
 
-Returns `state["carousel_urls"]` — one URL per rendered slide, in the same
-order as `state["carousel_draft"]`.
+Returns:
+    state["carousel_urls_ko"] — one URL per rendered KO slide
+    state["carousel_urls_en"] — one URL per rendered EN slide
+    state["carousel_urls"]    — back-compat alias = carousel_urls_ko
 """
 
 from __future__ import annotations
@@ -327,10 +327,29 @@ def _upload_to_supabase(png_bytes: bytes, suffix: str = "") -> str | None:
 # =============================================================================
 
 
+def _slide_overlay_text(slide: dict[str, Any]) -> str:
+    """
+    Combine the new bilingual schema's `title` + `description` into the single
+    `text` param the OG endpoint expects. Falls back to the legacy
+    `overlay_text` key for back-compat with any pre-bilingual carousels.
+    """
+    title = (slide.get("title") or "").strip()
+    description = (slide.get("description") or "").strip()
+    if title and description:
+        return f"{title}\n{description}"
+    if title:
+        return title
+    if description:
+        return description
+    return (slide.get("overlay_text") or "").strip()
+
+
 def _render_slide(
     slide: dict[str, Any],
     index: int,
     raw_pool: list[str],
+    *,
+    suffix: str = "",
 ) -> tuple[str, str]:
     """
     Render one slide via the OG template, with strict photo-first priority:
@@ -338,7 +357,7 @@ def _render_slide(
         1. Writer-curated `source_url` (any slide type that supplies one)
         2. Next unused real photo from `raw_pool` (collector-fetched
            `marketing_hotspots.photo_urls`)
-        3. AI generation via `_generate_image(image_prompt)`  ← LAST RESORT
+        3. AI generation via `_generate_image(photo_instruction)`  ← LAST RESORT
         4. Mock fallback
 
     Each candidate is attempted through the OG renderer + Supabase upload.
@@ -349,12 +368,15 @@ def _render_slide(
 
     Mutates `raw_pool` in place: a successfully-rendered photo is removed
     so later slides in the same carousel don't reuse it.
+
+    `suffix` disambiguates uploads between KO/EN tracks of the same slide
+    so the bucket key doesn't collide.
     """
-    overlay_text = (slide.get("overlay_text") or "").strip()
+    overlay_text = _slide_overlay_text(slide)
     category = slide.get("content_category") or DEFAULT_CONTENT_CATEGORY
 
     # Ordered candidate list. kind in {"photo", "ai"}.
-    # For "photo", payload is a URL; for "ai", payload is the image_prompt.
+    # For "photo", payload is a URL; for "ai", payload is the photo_instruction.
     candidates: list[tuple[str, str]] = []
 
     # 1. Writer-curated source_url (regardless of slide type — even an
@@ -372,7 +394,12 @@ def _render_slide(
 
     # 3. AI generation — ABSOLUTE LAST RESORT. Only enqueued if a prompt
     #    exists; never tried before all real photos have been exhausted.
-    image_prompt = (slide.get("image_prompt") or "").strip()
+    # New bilingual schema uses `photo_instruction`; older drafts used `image_prompt`.
+    image_prompt = (
+        slide.get("photo_instruction")
+        or slide.get("image_prompt")
+        or ""
+    ).strip()
     if image_prompt:
         candidates.append(("ai", image_prompt))
 
@@ -402,11 +429,35 @@ def _render_slide(
         if kind == "photo" and candidate_url in raw_pool:
             raw_pool.remove(candidate_url)
 
-        public_url = _upload_to_supabase(png_bytes, suffix=f"s{index}")
+        upload_suffix = f"s{index}{('_' + suffix) if suffix else ''}"
+        public_url = _upload_to_supabase(png_bytes, suffix=upload_suffix)
         return (public_url or candidate_url), model_tag
 
     print(f"[Designer] slide {index}: all candidates exhausted — using mock.")
     return MOCK_IMAGE_URL, MOCK_MODEL_NAME
+
+
+def _render_carousel(
+    carousel: list[dict[str, Any]],
+    raw_pool: list[str],
+    *,
+    locale: str,
+) -> tuple[list[str], list[str]]:
+    """
+    Render every slide in `carousel`, returning `(urls, model_tags)` aligned
+    by index. `raw_pool` is mutated in place — pass a separate copy per
+    locale so the KO and EN tracks don't fight over the same photos.
+    """
+    urls: list[str] = []
+    model_tags: list[str] = []
+    for i, slide in enumerate(carousel, start=1):
+        if not isinstance(slide, dict):
+            continue
+        final_url, model_tag = _render_slide(slide, i, raw_pool, suffix=locale)
+        urls.append(final_url)
+        if model_tag:
+            model_tags.append(model_tag)
+    return urls, model_tags
 
 
 # =============================================================================
@@ -415,49 +466,55 @@ def _render_slide(
 
 
 def designer_node(state: dict[str, Any]) -> dict[str, Any]:
-    carousel = state.get("carousel_draft") or []
-    if not carousel:
+    carousel_ko = state.get("carousel_ko") or state.get("carousel_draft") or []
+    carousel_en = state.get("carousel_en") or []
+
+    if not carousel_ko and not carousel_en:
         return {
-            "carousel_urls": [],
-            "image_url": "",
+            "carousel_urls_ko": [],
+            "carousel_urls_en": [],
             "image_model": MOCK_MODEL_NAME,
-            "history": [{"node": "designer", "skipped": "no carousel_draft"}],
+            "history": [{"node": "designer", "skipped": "no carousel"}],
         }
 
-    # Shared real-photo pool across all slides. Each successful photo render
-    # consumes one entry. AI generation only fires once this pool is empty
-    # (or every remaining URL has failed to render) — authenticity over
-    # synthesis by policy.
-    raw_pool: list[str] = [
+    # Each locale gets its OWN copy of the photo pool. The KO and EN tracks
+    # render the same story in parallel; we WANT them to land on the same
+    # real photos so the visual narrative matches across languages. Sharing
+    # one pool would starve whichever locale rendered second.
+    base_pool: list[str] = [
         url for url in (state.get("raw_photo_urls") or [])
         if isinstance(url, str) and url.startswith(("http://", "https://"))
     ]
-    initial_pool_size = len(raw_pool)
+    initial_pool_size = len(base_pool)
 
-    carousel_urls: list[str] = []
-    model_tags: list[str] = []
-    for i, slide in enumerate(carousel, start=1):
-        if not isinstance(slide, dict):
-            continue
-        final_url, model_tag = _render_slide(slide, i, raw_pool)
-        carousel_urls.append(final_url)
-        if model_tag:
-            model_tags.append(model_tag)
+    pool_ko = list(base_pool)
+    pool_en = list(base_pool)
+
+    carousel_urls_ko, model_tags_ko = _render_carousel(
+        carousel_ko, pool_ko, locale="ko"
+    )
+    carousel_urls_en, model_tags_en = _render_carousel(
+        carousel_en, pool_en, locale="en"
+    )
+
+    all_model_tags = model_tags_ko + model_tags_en
 
     return {
-        "carousel_urls": carousel_urls,
-        # Cover URL alias for the existing summary printouts.
-        "image_url": carousel_urls[0] if carousel_urls else "",
-        "image_model": ",".join(sorted(set(model_tags))) or MOCK_MODEL_NAME,
+        "carousel_urls_ko": carousel_urls_ko,
+        "carousel_urls_en": carousel_urls_en,
+        "image_model": ",".join(sorted(set(all_model_tags))) or MOCK_MODEL_NAME,
         "history": [
             {
                 "node": "designer",
-                "slide_count": len(carousel_urls),
-                "models": model_tags,
+                "slide_count_ko": len(carousel_urls_ko),
+                "slide_count_en": len(carousel_urls_en),
+                "models": all_model_tags,
                 "raw_photos_available": initial_pool_size,
-                "raw_photos_remaining": len(raw_pool),
+                "raw_photos_remaining_ko": len(pool_ko),
+                "raw_photos_remaining_en": len(pool_en),
                 "ai_fallbacks": sum(
-                    1 for tag in model_tags if tag in (FLUX_MODEL, IMAGEN_MODEL)
+                    1 for tag in all_model_tags
+                    if tag in (FLUX_MODEL, IMAGEN_MODEL)
                 ),
             }
         ],

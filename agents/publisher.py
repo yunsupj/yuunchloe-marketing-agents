@@ -104,19 +104,29 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _insert_pending_row(
-    client, topic: str, draft: str, carousel_urls: list[str], subreddits: list[str]
+    client,
+    topic: str,
+    subreddits: list[str],
+    *,
+    draft_text_ko: str = "",
+    draft_text_en: str = "",
+    carousel_urls_ko: list[str] | None = None,
+    carousel_urls_en: list[str] | None = None,
+    reddit_promo_text: str = "",
 ) -> str | None:
     """
     Insert a row into `marketing_posts` and return the new row's id (as str)
-    or None on failure. `carousel_urls` is stored as an array (Postgres
-    TEXT[] / JSONB) so each slide URL is independently addressable from the
-    approval handler and downstream publisher. `subreddits` carries the
-    region-mapped target subreddit list for the Make.com publishing step.
+    or None on failure. Each language track and the Reddit-tuned promo are
+    stored in their own columns so the Make.com publishing step can dispatch
+    each channel independently after human approval.
     """
     payload = {
         "topic": topic,
-        "draft_text": draft,
-        "carousel_urls": carousel_urls,
+        "draft_text_ko": draft_text_ko,
+        "draft_text_en": draft_text_en,
+        "carousel_urls_ko": carousel_urls_ko or [],
+        "carousel_urls_en": carousel_urls_en or [],
+        "reddit_promo_text": reddit_promo_text,
         "subreddits": subreddits,
         "status": "pending",
     }
@@ -139,36 +149,77 @@ def _insert_pending_row(
 # =============================================================================
 
 
-_CAROUSEL_PREVIEW_LIMIT = 4
+_REDDIT_SNIPPET_CHARS = 600
 
 
 def _build_blocks(
-    topic: str, draft: str, carousel_urls: list[str], post_id: str
+    topic: str,
+    post_id: str,
+    *,
+    draft_text_ko: str = "",
+    carousel_urls_ko: list[str] | None = None,
+    reddit_promo_text: str = "",
 ) -> list[dict[str, Any]]:
-    body_text = _truncate(
+    """
+    Bilingual approval card: KO carousel cover thumbnail + KO draft body +
+    a snippet of the EN Reddit-tuned promo so the approver sees both tracks
+    at a glance without scrolling through 8 image blocks.
+    """
+    carousel_urls_ko = carousel_urls_ko or []
+    cover_url = carousel_urls_ko[0] if carousel_urls_ko else ""
+
+    header_text = _truncate(
         f"*New marketing post — pending approval*\n"
-        f"*Topic:* {topic}\n\n{draft}",
+        f"*Topic:* {topic}\n"
+        f"*Tracks:* 🇰🇷 KO Carousel + 🇺🇸 EN Reddit Promo",
         _SLACK_TEXT_BUDGET,
     )
 
     blocks: list[dict[str, Any]] = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": body_text},
+            "text": {"type": "mrkdwn", "text": header_text},
         }
     ]
 
-    # One image block per slide so the approver can scan the whole carousel.
-    # Slack rejects empty image_url, so each URL is filtered before append.
-    for i, url in enumerate(carousel_urls[:_CAROUSEL_PREVIEW_LIMIT], start=1):
-        if not url:
-            continue
+    # Single KO cover thumbnail — replaces the old single `image_url` block.
+    if cover_url:
         blocks.append(
             {
                 "type": "image",
-                "image_url": url,
-                "alt_text": f"Carousel slide {i}",
-                "title": {"type": "plain_text", "text": f"Slide {i}"},
+                "image_url": cover_url,
+                "alt_text": "KO carousel cover",
+                "title": {"type": "plain_text", "text": "🇰🇷 KO · Cover"},
+            }
+        )
+
+    if draft_text_ko:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _truncate(
+                        f"*🇰🇷 KO Carousel Draft*\n{draft_text_ko}",
+                        _SLACK_TEXT_BUDGET,
+                    ),
+                },
+            }
+        )
+
+    if reddit_promo_text:
+        blocks.append({"type": "divider"})
+        snippet = _truncate(reddit_promo_text, _REDDIT_SNIPPET_CHARS)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _truncate(
+                        f"*🇺🇸 EN Reddit Promo (snippet)*\n{snippet}",
+                        _SLACK_TEXT_BUDGET,
+                    ),
+                },
             }
         )
 
@@ -239,13 +290,19 @@ def _post_to_slack(
 # =============================================================================
 
 
-def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
-    draft = (state.get("draft") or "").strip()
-    raw_urls = state.get("carousel_urls") or []
-    carousel_urls = [
-        u.strip() for u in raw_urls
+def _clean_url_list(raw: Any) -> list[str]:
+    return [
+        u.strip() for u in (raw or [])
         if isinstance(u, str) and u.strip()
     ]
+
+
+def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
+    draft_text_ko = (state.get("draft_text_ko") or state.get("draft") or "").strip()
+    draft_text_en = (state.get("draft_text_en") or "").strip()
+    carousel_urls_ko = _clean_url_list(state.get("carousel_urls_ko"))
+    carousel_urls_en = _clean_url_list(state.get("carousel_urls_en"))
+    reddit_promo_text = (state.get("reddit_promo_text") or "").strip()
     topic = _extract_topic(state)
 
     target_region = state.get("target_region") or {}
@@ -268,7 +325,16 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    post_id = _insert_pending_row(client, topic, draft, carousel_urls, subreddits)
+    post_id = _insert_pending_row(
+        client,
+        topic,
+        subreddits,
+        draft_text_ko=draft_text_ko,
+        draft_text_en=draft_text_en,
+        carousel_urls_ko=carousel_urls_ko,
+        carousel_urls_en=carousel_urls_en,
+        reddit_promo_text=reddit_promo_text,
+    )
     if post_id is None:
         return {
             "published": False,
@@ -294,7 +360,13 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
-    blocks = _build_blocks(topic, draft, carousel_urls, post_id)
+    blocks = _build_blocks(
+        topic,
+        post_id,
+        draft_text_ko=draft_text_ko,
+        carousel_urls_ko=carousel_urls_ko,
+        reddit_promo_text=reddit_promo_text,
+    )
     ok, info = _post_to_slack(bot_token, channel, topic, blocks)
     if not ok:
         print(f"[Publisher] Slack post failed: {info}")

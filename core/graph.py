@@ -64,18 +64,31 @@ class GraphState(TypedDict, total=False):
     research_notes: str                 # summarized local signals / trends
     raw_photo_urls: list[str]           # real photos pulled from marketing_hotspots
 
-    # ---- Writer <-> Critic loop ----
-    draft: str                          # flattened text view (joined overlay_texts)
-    carousel_draft: list[dict[str, Any]]  # 3-slide storyboard: cover + 2 real photos
+    # ---- Writer <-> Critic loop (Bilingual Two-Track) ----
+    # The Writer now emits ONE JSON object containing BOTH a Korean and an
+    # English carousel, plus a Reddit-tuned English promo text and per-channel
+    # captions. State keys are namespaced by locale so downstream nodes can
+    # render / publish each track independently.
+    draft: str                          # legacy joined-text alias = draft_text_ko
+    draft_text_ko: str                  # flattened KO text (title+desc per slide)
+    draft_text_en: str                  # flattened EN text (title+desc per slide)
+    carousel_ko: list[dict[str, Any]]   # 4 KO slides: slide_number/photo_instruction/title/description
+    carousel_en: list[dict[str, Any]]   # 4 EN slides, same shape
+    carousel_draft: list[dict[str, Any]]  # back-compat alias = carousel_ko
+    reddit_promo_text: str              # native English Reddit-style long-form promo
+    caption_ko: str                     # IG/TikTok caption (KO) with hashtags
+    caption_en: str                     # Reddit profile-post caption (EN)
     revision: int                       # how many Writer passes have run
     critic_feedback: str                # latest Critic notes for the Writer
     critic_score: float                 # 0.0 – 1.0; compared to min_quality_score
     approved: bool                      # Critic's gate; True = exit loop
 
     # ---- Designer / Publisher ----
-    # Per-slide image_prompt and overlay_text now live inside carousel_draft items.
-    carousel_urls: list[str]            # one final public URL per rendered slide
-    image_url: str                      # cover URL alias = carousel_urls[0] (compat)
+    # Per-slide photo_instruction and copy now live inside carousel_ko / _en items.
+    carousel_urls: list[str]            # KO rendered URLs (back-compat alias)
+    carousel_urls_ko: list[str]         # one final public URL per KO slide
+    carousel_urls_en: list[str]         # one final public URL per EN slide
+    image_url: str                      # cover URL alias = carousel_urls_ko[0]
     image_model: str                    # comma-joined A/B model tags across slides
     published: bool                     # True if Publisher hit the webhook OK
     publish_status: str                 # human-readable publish outcome

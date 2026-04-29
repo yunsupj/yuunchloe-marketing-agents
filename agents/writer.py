@@ -1,21 +1,22 @@
 """
-Writer agent: produces a 4-slide carousel storyboard for the active app/region.
+Writer agent — Bilingual Two-Track carousel mode.
 
-Two roles in one call:
-    1. Vision Curator — sees the real photos in `state['raw_photo_urls']`
-       (passed as image inputs in the HumanMessage) and picks the best 3
-       for slides 1, 2, 3.
-    2. Copywriter — writes per-slide overlay_text in the active profile's
-       persona/tone (sourced from settings.yaml brand_voice).
+The Writer issues a SINGLE LLM call that returns ONE JSON object with five
+top-level keys:
 
-Slide 4 is always a hardcoded `app_promo` card (logo + CTA). Slides 1–3 must
-reference URLs from `raw_photo_urls`; the post-parse validator rejects any
-hallucinated `source_url` and substitutes from the real-photo pool to defend
-against the LLM occasionally inventing fake unsplash/pexels links.
+    {
+      "carousel_ko":      [ {slide_number, photo_instruction, title, description} x 4 ],
+      "carousel_en":      [ {slide_number, photo_instruction, title, description} x 4 ],
+      "reddit_promo_text": "<long-form English post>",
+      "caption_ko":        "<IG/TikTok KO caption>",
+      "caption_en":        "<Reddit profile-post EN caption>"
+    }
 
-Output is a JSON array stored in `state['carousel_draft']`. A flat textual
-view is also stored in `state['draft']` (joined overlay_texts) so the
-existing Critic / dashboard surfaces still have plain text to score.
+`_coerce_payload` parses the model's response, validates both carousels (must
+be 4-slide lists), normalizes each slide to the canonical shape, and falls
+back to a safe placeholder when JSON parse fails. State is populated with
+both KO and EN tracks so downstream nodes (designer, publisher) can render
+and ship each language independently.
 """
 
 from __future__ import annotations
@@ -35,66 +36,31 @@ from prompts.writer_prompt import (
 )
 
 
-# Cap how many image_url parts we shove into the request so we don't blow up
-# token / per-request image limits on a long hotspot photo list.
 MAX_VISION_IMAGES = 6
 
-# Carousel structure constants — kept in lockstep with prompts/writer_prompt.py.
+# Each track is exactly 4 slides: 3 content + 1 app_promo CTA.
 EXPECTED_SLIDE_COUNT = 4
-REAL_PHOTO_SLIDE_COUNT = 3   # slides 1, 2, 3 must be real_photo
 APP_PROMO_LOGO_URL = (
     "https://aaicoyblsmdjoqmykivx.supabase.co/storage/v1/object/"
     "public/marketing-assets/logo/logo.png"
 )
-DEFAULT_APP_PROMO_OVERLAY = "우리 동네 진짜 정보, 깨알톡에서"
+DEFAULT_APP_PROMO_TITLE_KO = "우리 동네 진짜 정보, 깨알톡에서"
+DEFAULT_APP_PROMO_DESC_KO = "지금 바로 다운로드"
+DEFAULT_APP_PROMO_TITLE_EN = "Real local intel, in your pocket."
+DEFAULT_APP_PROMO_DESC_EN = "Built by a local. Try it."
 
-# Allowed values for the dynamic orange-pill category badge on slides 1-3.
-# Kept in lockstep with prompts/writer_prompt.py [Content Category Badge].
-CATEGORY_DINING = "DINING * LOCAL PICK"
-CATEGORY_PLACES = "PLACES * LOCAL PICK"
-CATEGORY_CHATTER = "NEIGHBORHOOD CHATTER"
-ALLOWED_CONTENT_CATEGORIES = frozenset(
-    {CATEGORY_DINING, CATEGORY_PLACES, CATEGORY_CHATTER}
-)
-DEFAULT_CONTENT_CATEGORY = CATEGORY_CHATTER
-
-
-def _normalize_content_category(value: Any) -> str:
-    """
-    Coerce the model's `content_category` into one of the three allowed pill
-    values. Accepts minor casing/whitespace variation; falls back to
-    NEIGHBORHOOD CHATTER on anything unrecognized so the downstream renderer
-    never sees the legacy hardcoded "주민 인증" or invented copy.
-    """
-    if not isinstance(value, str):
-        return DEFAULT_CONTENT_CATEGORY
-    normalized = " ".join(value.strip().upper().split())
-    if normalized in ALLOWED_CONTENT_CATEGORIES:
-        return normalized
-    if "DINING" in normalized:
-        return CATEGORY_DINING
-    if "PLACES" in normalized:
-        return CATEGORY_PLACES
-    if "CHATTER" in normalized or "NEIGHBORHOOD" in normalized:
-        return CATEGORY_CHATTER
-    return DEFAULT_CONTENT_CATEGORY
+# Slide-keys we expect post-coercion. Kept stable across both languages so
+# the Designer can read them without language-specific branching.
+SLIDE_KEYS = ("slide_number", "photo_instruction", "title", "description")
 
 
 def _build_llm() -> ChatOpenAI:
-    """
-    Persona writer LLM. gpt-4o-mini is vision-capable and matches the pin we
-    set for persona consistency; for richer vision curation switch to
-    "gpt-4o" via env later if needed.
-    """
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         return ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0.7,
             api_key=openai_key,
-            # LangChain wraps each call in tenacity; on 429 it sleeps with
-            # exponential backoff (≈ 4s, 8s, 16s, 32s, 64s) before giving up,
-            # which keeps the Writer↔Critic loop alive through TPM throttling.
             max_retries=5,
         )
 
@@ -146,11 +112,6 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
 
 
 def _build_human_message(state: dict[str, Any]) -> HumanMessage:
-    """
-    Build the user-turn message. When raw photos are available, we use the
-    OpenAI vision content-parts format so gpt-4o-mini can actually see them
-    and reference each `source_url` correctly in the JSON output.
-    """
     app_context = state.get("app_context") or {}
     target_region = state.get("target_region") or {}
     sub_regions = target_region.get("sub_regions") or []
@@ -166,20 +127,16 @@ def _build_human_message(state: dict[str, Any]) -> HumanMessage:
     ]
     if photo_urls:
         instruction_lines.append(
-            f"첨부된 {len(photo_urls)}장의 실제 사진을 직접 보고, 그 중 best 3장을 골라 "
-            "slide 1 / slide 2 / slide 3 의 source_url 에 정확히 그대로 적어라. "
-            "URL 을 변형하거나 단축하지 말고, 흐릿하거나 주제와 무관해 보이는 사진은 절대 고르지 마라. "
-            "🚨 source_url 은 반드시 첨부된 목록 중 하나여야 한다 — unsplash.com, pexels.com, "
-            "googleusercontent.com 등 첨부되지 않은 URL 을 발명하면 자동 reject 된다. "
-            "사진이 3장 미만이면 같은 URL 을 재사용해도 된다 (발명은 절대 금지). "
-            "Slide 4 는 무조건 app_promo 로, source_url 은 제공된 logo URL 을 글자 그대로 사용해라."
+            f"첨부된 {len(photo_urls)}장의 실제 사진을 직접 보고, KO 와 EN 양쪽 카드뉴스에서 "
+            "best 3 장을 슬라이드 1·2·3 의 photo_instruction 으로 자연어로 지칭해라 "
+            '(예: "Use the 2nd attached photo, the wide storefront shot."). '
+            "URL 을 photo_instruction 에 적지 마라 — URL 매칭은 다운스트림이 처리한다. "
+            "Slide 4 는 KO/EN 모두 app_promo logo 고정 (photo_instruction 그대로)."
         )
     else:
         instruction_lines.append(
-            "첨부된 raw photo 가 없다. Slide 1, 2, 3 은 모두 type='ai_generated' 로 채우고 "
-            "source_url 키는 출력하지 말고 image_prompt + overlay_text 만 채워라. "
-            "이 경우에도 가짜 URL 은 절대 만들지 마라. "
-            "Slide 4 는 무조건 app_promo 로 logo URL 을 그대로 사용해라."
+            "첨부된 raw photo 가 없다. 모든 슬라이드의 photo_instruction 을 "
+            '"AI-generated B-roll: <짧은 mood prompt>" 형식으로 적어라. 사람/얼굴/글자 금지.'
         )
     text_part = "\n".join(line for line in instruction_lines if line is not None).strip()
 
@@ -200,178 +157,165 @@ def _strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
-def _make_real_photo_slide(
-    idx: int,
-    unused_pool: list[str],
-    all_photos: list[str],
-    overlay: str,
-    content_category: str = DEFAULT_CONTENT_CATEGORY,
+def _normalize_slide(item: Any, idx: int) -> dict[str, Any]:
+    """
+    Coerce a single LLM-emitted slide dict into the canonical
+    {slide_number, photo_instruction, title, description} shape.
+
+    Tolerates legacy/alt keys (`overlay_text` -> title, `image_prompt` ->
+    photo_instruction) so a partially-conforming model output still produces
+    a valid slide rather than dropping the field.
+    """
+    if not isinstance(item, dict):
+        item = {}
+
+    title = (item.get("title") or item.get("overlay_text") or "").strip()
+    description = (item.get("description") or "").strip()
+    photo_instruction = (
+        item.get("photo_instruction")
+        or item.get("image_prompt")
+        or ""
+    ).strip()
+
+    return {
+        "slide_number": idx,
+        "photo_instruction": photo_instruction,
+        "title": title,
+        "description": description,
+    }
+
+
+def _make_app_promo_slide(
+    title: str = "",
+    description: str = "",
+    *,
+    locale: str = "ko",
 ) -> dict[str, Any]:
-    """
-    Build a single real_photo slide. Prefers an unused photo from the pool
-    (mutates by popping); reuses an existing photo if the pool is exhausted
-    but we still have *any* real photos; degrades to ai_generated only when
-    `all_photos` is completely empty. NEVER invents a URL.
+    """Slide 4 — always the same logo URL; copy varies by locale."""
+    if locale == "en":
+        default_title = DEFAULT_APP_PROMO_TITLE_EN
+        default_desc = DEFAULT_APP_PROMO_DESC_EN
+    else:
+        default_title = DEFAULT_APP_PROMO_TITLE_KO
+        default_desc = DEFAULT_APP_PROMO_DESC_KO
 
-    `content_category` is the dynamic orange-pill badge text — must already
-    be a member of ALLOWED_CONTENT_CATEGORIES.
-    """
-    if unused_pool:
-        url = unused_pool.pop(0)
-        return {
-            "slide": idx,
-            "type": "real_photo",
-            "source_url": url,
-            "content_category": content_category,
-            "overlay_text": overlay,
-        }
-    if all_photos:
-        # Reuse-by-index — better than fabricating. Anti-hallucination policy:
-        # duplication is acceptable; invented URLs are not.
-        url = all_photos[(idx - 1) % len(all_photos)]
-        return {
-            "slide": idx,
-            "type": "real_photo",
-            "source_url": url,
-            "content_category": content_category,
-            "overlay_text": overlay,
-        }
     return {
-        "slide": idx,
-        "type": "ai_generated",
-        "image_prompt": (
-            "Cinematic editorial local photography, soft natural light, "
-            "subject placed in upper two-thirds, lower third left intentionally "
-            "clean for headline overlay, no text in frame, 100% opacity."
-        ),
-        "content_category": content_category,
-        "overlay_text": overlay,
+        "slide_number": EXPECTED_SLIDE_COUNT,
+        "photo_instruction": "Use app_promo logo (hardcoded downstream).",
+        "source_url": APP_PROMO_LOGO_URL,  # downstream Designer reads this directly
+        "title": title.strip() or default_title,
+        "description": description.strip() or default_desc,
     }
 
 
-def _make_app_promo_slide(overlay: str = "") -> dict[str, Any]:
+def _coerce_carousel_list(
+    raw_list: Any, *, locale: str
+) -> list[dict[str, Any]]:
+    """
+    Validate and normalize one carousel list (KO or EN). Always returns
+    EXACTLY EXPECTED_SLIDE_COUNT slides; pads / truncates as needed.
+
+    Slides 1-3 are content slides; slide 4 is always overwritten with the
+    hardcoded app_promo (preserving any title/description the model wrote).
+    """
+    if not isinstance(raw_list, list):
+        raw_list = []
+
+    # First, normalize whatever the model gave us.
+    normalized: list[dict[str, Any]] = []
+    for i, item in enumerate(raw_list[:EXPECTED_SLIDE_COUNT], start=1):
+        normalized.append(_normalize_slide(item, i))
+
+    # Pad missing content slides with empty placeholders.
+    while len(normalized) < EXPECTED_SLIDE_COUNT - 1:
+        normalized.append(_normalize_slide({}, len(normalized) + 1))
+
+    # Slide 4 — always rebuilt as app_promo. Preserve copy if the model
+    # wrote one in the 4th position.
+    promo_title = ""
+    promo_desc = ""
+    if len(normalized) >= EXPECTED_SLIDE_COUNT:
+        last = normalized[EXPECTED_SLIDE_COUNT - 1]
+        promo_title = last.get("title", "")
+        promo_desc = last.get("description", "")
+        normalized = normalized[: EXPECTED_SLIDE_COUNT - 1]
+    elif len(raw_list) >= EXPECTED_SLIDE_COUNT and isinstance(
+        raw_list[EXPECTED_SLIDE_COUNT - 1], dict
+    ):
+        last = raw_list[EXPECTED_SLIDE_COUNT - 1]
+        promo_title = (last.get("title") or last.get("overlay_text") or "").strip()
+        promo_desc = (last.get("description") or "").strip()
+
+    normalized.append(
+        _make_app_promo_slide(promo_title, promo_desc, locale=locale)
+    )
+    return normalized
+
+
+def _fallback_payload() -> dict[str, Any]:
+    """Safe placeholder payload when JSON parse fails entirely."""
     return {
-        "slide": EXPECTED_SLIDE_COUNT,
-        "type": "app_promo",
-        "source_url": APP_PROMO_LOGO_URL,
-        "overlay_text": overlay.strip() or DEFAULT_APP_PROMO_OVERLAY,
+        "carousel_ko": _coerce_carousel_list([], locale="ko"),
+        "carousel_en": _coerce_carousel_list([], locale="en"),
+        "reddit_promo_text": "",
+        "caption_ko": "",
+        "caption_en": "",
     }
 
 
-def _fallback_carousel(photo_urls: list[str]) -> list[dict[str, Any]]:
+def _coerce_payload(raw: str) -> dict[str, Any]:
     """
-    Build a usable 4-slide carousel when JSON parse fails entirely: slides
-    1-3 from `photo_urls` (reusing or padding with ai_generated only if no
-    photos exist at all), slide 4 always the hardcoded app_promo.
-    """
-    unused_pool = list(photo_urls)
-    slides: list[dict[str, Any]] = [
-        _make_real_photo_slide(
-            i, unused_pool, photo_urls, "", DEFAULT_CONTENT_CATEGORY
-        )
-        for i in range(1, REAL_PHOTO_SLIDE_COUNT + 1)
-    ]
-    slides.append(_make_app_promo_slide())
-    return slides
+    Parse the LLM JSON object and return a fully-validated bilingual payload.
 
-
-def _coerce_carousel(raw: str, photo_urls: list[str]) -> list[dict[str, Any]]:
-    """
-    Parse the LLM JSON, then enforce the 4-slide invariant with strict
-    anti-hallucination guards:
-        - slides 1-3 must be real_photo (or ai_generated only if no photos)
-        - any source_url not present in `photo_urls` is rejected and
-          replaced with one from the pool — never trusted from the model
-        - slide 4 is always overwritten with the hardcoded app_promo logo
-
-    The model can technically return any garbage; this function ensures the
-    downstream Designer never sees an invented unsplash/pexels URL.
+    Validation guarantees:
+        - top-level result is a dict with all 5 keys present
+        - carousel_ko / carousel_en are lists of EXACTLY 4 normalized slides
+        - reddit_promo_text / caption_ko / caption_en are strings
     """
     cleaned = _strip_markdown_fences(raw)
     data: Any = None
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if match:
             try:
                 data = json.loads(match.group(0))
             except json.JSONDecodeError:
                 data = None
 
-    if not isinstance(data, list) or not data:
-        print("[Writer] JSON parse failed — using fallback carousel.")
-        return _fallback_carousel(photo_urls)
+    if not isinstance(data, dict):
+        print("[Writer] JSON parse failed — using fallback bilingual payload.")
+        return _fallback_payload()
 
-    photo_set = set(photo_urls)
-    unused_pool = list(photo_urls)
-    cleaned_slides: list[dict[str, Any]] = []
+    carousel_ko = _coerce_carousel_list(data.get("carousel_ko"), locale="ko")
+    carousel_en = _coerce_carousel_list(data.get("carousel_en"), locale="en")
 
-    # Process up to (EXPECTED_SLIDE_COUNT - 1) slides as real_photo candidates.
-    # Slide 4 is always rebuilt at the end regardless of what the model said.
-    raw_slides_for_photos = [
-        item for item in data[: EXPECTED_SLIDE_COUNT - 1] if isinstance(item, dict)
-    ]
+    reddit_promo = data.get("reddit_promo_text")
+    caption_ko = data.get("caption_ko")
+    caption_en = data.get("caption_en")
 
-    for i in range(1, REAL_PHOTO_SLIDE_COUNT + 1):
-        item = raw_slides_for_photos[i - 1] if i - 1 < len(raw_slides_for_photos) else {}
-        overlay = (item.get("overlay_text") or "").strip()
-        src = (item.get("source_url") or "").strip()
-
-        # Dynamic orange-pill category badge. Normalize so the legacy hardcoded
-        # "주민 인증" / random LLM strings can never reach the renderer.
-        raw_category = item.get("content_category")
-        category = _normalize_content_category(raw_category)
-        if isinstance(raw_category, str) and raw_category.strip() and category != raw_category.strip():
-            print(
-                f"[Writer] slide {i}: content_category {raw_category!r} "
-                f"normalized to {category!r}."
-            )
-
-        if src and src in photo_set:
-            # Valid — model picked a URL that's in the attached pool.
-            if src in unused_pool:
-                unused_pool.remove(src)
-            cleaned_slides.append(
-                {
-                    "slide": i,
-                    "type": "real_photo",
-                    "source_url": src,
-                    "content_category": category,
-                    "overlay_text": overlay,
-                }
-            )
-        else:
-            if src:
-                # The model invented a URL or copied one not in the attached set.
-                # Reject it and substitute from the real-photo pool.
-                print(
-                    f"[Writer] slide {i}: rejected hallucinated source_url "
-                    f"({src!r}) — substituting from raw_photo_urls."
-                )
-            cleaned_slides.append(
-                _make_real_photo_slide(
-                    i, unused_pool, photo_urls, overlay, category
-                )
-            )
-
-    # Slide 4 — always the hardcoded app_promo. If the model returned an
-    # overlay_text for slide 4, preserve it; otherwise use the default.
-    promo_overlay = ""
-    if len(data) >= EXPECTED_SLIDE_COUNT and isinstance(data[EXPECTED_SLIDE_COUNT - 1], dict):
-        promo_overlay = (data[EXPECTED_SLIDE_COUNT - 1].get("overlay_text") or "").strip()
-    cleaned_slides.append(_make_app_promo_slide(promo_overlay))
-
-    return cleaned_slides
+    return {
+        "carousel_ko": carousel_ko,
+        "carousel_en": carousel_en,
+        "reddit_promo_text": reddit_promo if isinstance(reddit_promo, str) else "",
+        "caption_ko": caption_ko if isinstance(caption_ko, str) else "",
+        "caption_en": caption_en if isinstance(caption_en, str) else "",
+    }
 
 
-def _flatten_to_draft(carousel: list[dict[str, Any]]) -> str:
-    """Concatenate overlay_texts so the existing Critic still sees readable text."""
-    parts = []
+def _flatten_slides(carousel: list[dict[str, Any]]) -> str:
+    """Concatenate per-slide title + description for Critic-readable text."""
+    parts: list[str] = []
     for slide in carousel:
-        text = (slide.get("overlay_text") or "").strip()
-        if text:
-            parts.append(text)
+        title = (slide.get("title") or "").strip()
+        desc = (slide.get("description") or "").strip()
+        if title and desc:
+            parts.append(f"{title}\n{desc}")
+        elif title:
+            parts.append(title)
+        elif desc:
+            parts.append(desc)
     return "\n---\n".join(parts)
 
 
@@ -386,19 +330,34 @@ def writer_node(state: dict[str, Any]) -> dict[str, Any]:
     response = llm.invoke([SystemMessage(content=system_prompt), human_msg])
     raw = getattr(response, "content", str(response)) or ""
 
-    carousel = _coerce_carousel(raw, photo_urls)
-    draft = _flatten_to_draft(carousel)
+    payload = _coerce_payload(raw)
 
+    carousel_ko = payload["carousel_ko"]
+    carousel_en = payload["carousel_en"]
+    draft_text_ko = _flatten_slides(carousel_ko)
+    draft_text_en = _flatten_slides(carousel_en)
+
+    # `draft` and `carousel_draft` remain populated as KO aliases for
+    # back-compatibility with Critic / dashboard surfaces that still read them.
     return {
-        "draft": draft,
-        "carousel_draft": carousel,
+        "draft": draft_text_ko,
+        "draft_text_ko": draft_text_ko,
+        "draft_text_en": draft_text_en,
+        "carousel_draft": carousel_ko,
+        "carousel_ko": carousel_ko,
+        "carousel_en": carousel_en,
+        "reddit_promo_text": payload["reddit_promo_text"],
+        "caption_ko": payload["caption_ko"],
+        "caption_en": payload["caption_en"],
         "revision": revision,
         "history": [
             {
                 "node": "writer",
                 "revision": revision,
-                "slide_count": len(carousel),
+                "ko_slide_count": len(carousel_ko),
+                "en_slide_count": len(carousel_en),
                 "vision_inputs": len(photo_urls),
+                "has_reddit_promo": bool(payload["reddit_promo_text"]),
                 "used_feedback": bool(
                     revision > 1 and state.get("critic_feedback")
                 ),

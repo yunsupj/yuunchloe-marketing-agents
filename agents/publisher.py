@@ -158,15 +158,13 @@ def _build_blocks(
     *,
     draft_text_ko: str = "",
     carousel_urls_ko: list[str] | None = None,
+    caption_ko: str = "",
     reddit_promo_text: str = "",
 ) -> list[dict[str, Any]]:
     """
-    Bilingual approval card: KO carousel cover thumbnail + KO draft body +
-    a snippet of the EN Reddit-tuned promo so the approver sees both tracks
-    at a glance without scrolling through 8 image blocks.
+    Approval card: all 4 KO carousel images + KO draft + IG caption + Reddit snippet.
     """
     carousel_urls_ko = carousel_urls_ko or []
-    cover_url = carousel_urls_ko[0] if carousel_urls_ko else ""
 
     header_text = _truncate(
         f"*New marketing post — pending approval*\n"
@@ -182,14 +180,16 @@ def _build_blocks(
         }
     ]
 
-    # Single KO cover thumbnail — replaces the old single `image_url` block.
-    if cover_url:
+    # All 4 KO carousel slides so the approver reviews the full set.
+    for i, url in enumerate(carousel_urls_ko[:4], start=1):
+        if not url:
+            continue
         blocks.append(
             {
                 "type": "image",
-                "image_url": cover_url,
-                "alt_text": "KO carousel cover",
-                "title": {"type": "plain_text", "text": "🇰🇷 KO · Cover"},
+                "image_url": url,
+                "alt_text": f"KO slide {i}",
+                "title": {"type": "plain_text", "text": f"🇰🇷 KO Slide {i}"},
             }
         )
 
@@ -201,6 +201,20 @@ def _build_blocks(
                     "type": "mrkdwn",
                     "text": _truncate(
                         f"*🇰🇷 KO Carousel Draft*\n{draft_text_ko}",
+                        _SLACK_TEXT_BUDGET,
+                    ),
+                },
+            }
+        )
+
+    if caption_ko:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": _truncate(
+                        f"*📸 IG Caption (KO)*\n{caption_ko}",
                         _SLACK_TEXT_BUDGET,
                     ),
                 },
@@ -303,6 +317,7 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
     carousel_urls_ko = _clean_url_list(state.get("carousel_urls_ko"))
     carousel_urls_en = _clean_url_list(state.get("carousel_urls_en"))
     reddit_promo_text = (state.get("reddit_promo_text") or "").strip()
+    caption_ko = (state.get("caption_ko") or "").strip()
     topic = _extract_topic(state)
 
     target_region = state.get("target_region") or {}
@@ -365,6 +380,7 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
         post_id,
         draft_text_ko=draft_text_ko,
         carousel_urls_ko=carousel_urls_ko,
+        caption_ko=caption_ko,
         reddit_promo_text=reddit_promo_text,
     )
     ok, info = _post_to_slack(bot_token, channel, topic, blocks)

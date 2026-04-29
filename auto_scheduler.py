@@ -134,22 +134,24 @@ def get_local_hotplace() -> str:
         return random.choice(fallback)
 
     try:
-        resp = client.table("marketing_hotspots").select("name").execute()
+        resp = client.table("marketing_hotspots").select("name, address").execute()
     except Exception as e:
         print(f"[auto] marketing_hotspots query failed: {e!r} — using fallback.")
         return random.choice(fallback)
 
     rows = getattr(resp, "data", None) or []
-    names = [
-        (row.get("name") or "").strip()
-        for row in rows
+    valid_rows = [
+        row for row in rows
         if isinstance(row, dict) and (row.get("name") or "").strip()
     ]
-    if not names:
+    if not valid_rows:
         print("[auto] marketing_hotspots returned no rows — using fallback.")
         return random.choice(fallback)
 
-    return random.choice(names)
+    row = random.choice(valid_rows)
+    name = row.get("name", "").strip()
+    address = (row.get("address") or "").strip()
+    return f"{name} (Address: {address})" if address else name
 
 
 # =============================================================================

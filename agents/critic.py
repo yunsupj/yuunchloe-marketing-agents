@@ -93,7 +93,16 @@ def _parse_verdict(raw: str) -> dict[str, Any]:
 
 def critic_node(state: dict[str, Any]) -> dict[str, Any]:
     """Score the draft, produce feedback, and gate approval."""
-    draft = state.get("draft") or ""
+    draft_text_ko = (state.get("draft_text_ko") or state.get("draft") or "").strip()
+    draft_text_en = (state.get("draft_text_en") or "").strip()
+    reddit_promo_text = (state.get("reddit_promo_text") or "").strip()
+
+    combined_draft = f"[🇰🇷 KO Carousel]\n{draft_text_ko}"
+    if draft_text_en:
+        combined_draft += f"\n\n[🇺🇸 EN Carousel]\n{draft_text_en}"
+    if reddit_promo_text:
+        combined_draft += f"\n\n[🇺🇸 Reddit Promo]\n{reddit_promo_text}"
+
     app_context = state.get("app_context") or {}
     target_region = state.get("target_region") or {}
 
@@ -101,7 +110,7 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
         app_name=app_context.get("app_name", "the app"),
         target_region_label=target_region.get("label", "this region"),
     )
-    user_msg = CRITIC_USER_TEMPLATE.format(draft=draft)
+    user_msg = CRITIC_USER_TEMPLATE.format(draft=combined_draft)
 
     llm = _build_llm()
     response = llm.invoke(

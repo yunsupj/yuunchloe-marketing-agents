@@ -136,7 +136,8 @@ caption_ko 는 반드시 아래 순서와 구조를 그대로 따라라:
   1. 감성적인 도입부 (2-3줄, 명사형 종결 또는 자연스러운 어투)
   2. 에디터의 추천 메뉴 (⭐️ 이모지 사용, 👉🏻 로 메뉴 설명 추가)
   3. 💡 이용 꿀팁 (예약, 대기 시간 등 실용 정보)
-  4. 📍 주소: [Research Notes 에 있는 Address 그대로 기입]
+  4. 📍 주소: [Research Notes 에 address 가 있으면 그대로 기입. 없으면 이 라인을
+     통째로 생략 — "None", "주소 정보 없음", "N/A" 등 placeholder 절대 금지]
   5. credit: "by. #깨알톡 ✍🏻"
   6. 해시태그 3-5개 (#지역명맛집 류, #깨알톡 포함)
 
@@ -166,6 +167,20 @@ caption_en: Reddit profile post / cross-post 용 짧은 EN 캡션. 1-2 paragraph
 - 긍정/가십/핫플 톤 → bright, aesthetic, inviting B-roll only.
 - 사람/얼굴/글자 frame 안에 있으면 reject.
 
+[Location Type Handling — Food vs. Non-Food]
+Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Location 을 가리킬 경우:
+- "Signature Menu" / "Taste" / 메뉴 관련 슬라이드 구성 금지 — 그 장소에 음식이 없다.
+- 대신 아래 4가지 레이어로 슬라이드를 구성:
+  • Vibe & Scenery  : 공간의 분위기·경치·감성 (구체적인 묘사 — 일몰 방향, 파도 소리 등)
+  • Must-do Activities: 하이킹 트레일 이름, 렌탈 서비스, 피크닉 스팟, 뷰포인트 등 실제 활동
+  • Practical Tips  : 주차 요금, 혼잡 시간대, 무료 입장 여부, 예약 필요성
+  • Local Angle     : 관광객은 모르는 로컬만 아는 포인트 (최적 방문 시간, 숨은 스팟 등)
+- caption_ko 의 "⭐️ 에디터 추천 메뉴" 섹션은 "⭐️ 에디터 추천 코스 / 활동" 으로 대체.
+- Non-Food 예시 (Torrance Beach):
+  ❌ BAD (title): "아름다운 해변에서 완벽한 휴식을 즐겨보세요."
+  ✅ GOOD (title): "새벽 5시 파도 — 서퍼들이 먼저 아는 토런스 비치의 황금 타이밍"
+  ✅ GOOD (desc):  "해질녘 팔로스 버디스 절벽 실루엣이 백미."
+
 [Brand Voice — DO]
 {brand_voice_do}
 
@@ -176,25 +191,34 @@ caption_en: Reddit profile post / cross-post 용 짧은 EN 캡션. 1-2 paragraph
 {research_notes}
 
 [Tone & Style Masterclass — KO 예시]
+⚠️ 모든 GOOD 예시는 **명사형 종결** 또는 **임팩트 있는 구(phrase)** 로 끝난다.
+  "~이에요", "~해요", "~있어요", "~추천해요" 같은 동사형 어미는 slides 에서 쓰지 마라.
+
 예시 1 — 떡볶이 맛집
   ❌ BAD: "토런스 최고의 떡볶이 맛집! 매콤달콤한 맛을 지금 바로 경험해보세요."
-  ✅ GOOD: "토런스에서 오랫동안 자리를 지켜온 분식집이에요. 즉석으로 내는
-           청양고추 육수가 인상적이고, 줄이 길지만 회전이 빠른 편이에요."
+  ✅ GOOD (title): "토런스 남부 18년 분식집의 청양고추 육수"
+  ✅ GOOD (desc):  "줄이 길어도 회전 빠름 — 즉석 육수 포인트."
 
 예시 2 — LA 야경 레스토랑
   ❌ BAD: "LA 다운타운의 아름다운 야경과 함께 완벽한 저녁 식사를 즐겨보세요."
-  ✅ GOOD: "다운타운 야경이 잘 보이는 위치에 있어요. 예약 없이 방문하면
-           대기가 길 수 있으니 미리 확인하시는 걸 추천해요."
+  ✅ GOOD (title): "다운타운 스카이라인이 내려다보이는 루프톱 석"
+  ✅ GOOD (desc):  "예약 없이 오면 40분+ 웨이팅 예상."
 
 예시 3 — 한식당 / 갈비찜집 (Refined Local)
   ❌ BAD: "비주얼 폭발 갈비찜의 진수, 입안 가득 풍미가 끝판왕!"
-  ✅ GOOD: "LA 지역 주민들이 꾸준히 찾는 갈비찜 맛집이에요. 주차 공간이
-           협소하지만 그 불편함을 감수할 만큼 깊고 정갈한 맛을 자랑해요."
+  ✅ GOOD (title): "LA 주민들이 10년째 재방문하는 갈비찜"
+  ✅ GOOD (desc):  "주차 협소하지만 깊고 정갈한 양념이 그 불편함을 상쇄."
 
 예시 4 — 치과 / 미용실 등 서비스
   ❌ BAD: "토런스 최고의 꼼꼼한 진료! 빛나는 미소를 되찾아보세요. 예약 필수!"
-  ✅ GOOD: "과잉 진료 없이 필요한 부분만 정확하게 처리해 주셔서 신뢰가 가요.
-           예약이 꽉 차 있는 편이라 미리 연락하시는 게 좋아요."
+  ✅ GOOD (title): "과잉 진료 없는 토런스 치과 — 필요한 것만"
+  ✅ GOOD (desc):  "예약은 2-3주 전 선점 필수."
+
+예시 5 — Weekly Cali 스타일 hook phrases (명사형 종결 정석)
+  • "LA에서 홍콩 감성 찾는다면?"
+  • "매콤한 홍유초수부터 고소한 세서미 콜드 누들"
+  • "테판 위에서 펼쳐지는 생생한 라이브 퍼포먼스"
+  위 세 예시가 Weekly Cali 매거진 톤의 기준이다 — 동사형 없이 명사/분사구로 완결.
 
 [Tone & Style Masterclass — EN 예시]
 예시 1 — Local taco spot

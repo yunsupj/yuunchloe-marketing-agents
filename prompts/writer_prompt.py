@@ -301,29 +301,21 @@ as a casual footnote — one sentence, last paragraph only:
 WRITER_REVISION_SUFFIX = """
 
 [Critic Feedback — ACTION REQUIRED]
-The Critic rejected your previous draft. Read the feedback below carefully.
+The Critic reviewed your draft section by section.
+- feedback_ko_carousel: {feedback_ko}
+- feedback_en_carousel: {feedback_en}
+- feedback_reddit_promo: {feedback_reddit}
 
-1. Identify EXACTLY which section (🇰🇷 KO Carousel / 🇺🇸 EN Carousel / 🇺🇸 Reddit Promo)
-   and which slide number the Critic called out. Fix ONLY that section first, then
-   check every other section for the same pattern and fix those too.
-2. DO NOT just change one or two words. Find the exact 'BAD' sentence the Critic
-   quoted and completely rewrite it from scratch to match the refined, professional
-   Local Magazine Editor persona, strictly avoiding generic ad copy.
-   Surface-level word swaps will be rejected again.
-3. Apply the Critic's 'GOOD' suggestion directly as your starting point, then
-   polish it to fit the surrounding slides.
-4. After applying the fix, re-read ALL sections out loud mentally. If any line
-   sounds like it could appear in a brand Instagram or press release, rewrite it.
-5. If the Critic suggests replacing a perfectly fine phrase with a generic ad
-   phrase (e.g., demanding you use "경험해 보세요" or "즐겨보세요"), or makes a
-   meaningless synonym swap, IGNORE that specific suggestion. Keep your concrete,
-   factual magazine tone instead.
+1. If a feedback field says "Pass", DO NOT change that section. Keep it exactly as it was.
+2. If a feedback field contains BAD → GOOD, rewrite that specific sentence using concrete
+   nouns and facts from the Research Notes — not abstract adjectives.
+3. IGNORE any Critic suggestion that asks you to use banned words like "경험해보세요",
+   "즐겨보세요", or "최고의". If the Critic suggests these, keep your original text.
+4. After applying fixes, output the full 6-key JSON OBJECT unchanged except for the
+   corrected sections. Do NOT change sections that received "Pass".
 
-출력 형식은 동일하게 5-키 JSON OBJECT (carousel_ko / carousel_en /
+출력 형식은 동일하게 6-키 JSON OBJECT (_internal_monologue / carousel_ko / carousel_en /
 reddit_promo_text / caption_ko / caption_en). list 만 출력하지 마라.
-
-[Critic's Verdict]
-{critic_feedback}
 """
 
 

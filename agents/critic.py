@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from prompts.critic_prompt import CRITIC_SYSTEM_PROMPT, CRITIC_USER_TEMPLATE
 
 
-APPROVAL_THRESHOLD = 0.8
+APPROVAL_THRESHOLD = 0.85
 
 
 def _build_llm() -> ChatOpenAI:
@@ -126,9 +126,23 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
         score = 0.0
     score = max(0.0, min(1.0, score))
 
-    feedback = verdict.get("feedback") or ""
-    if not isinstance(feedback, str):
-        feedback = str(feedback)
+    feedback_ko = verdict.get("feedback_ko_carousel") or verdict.get("feedback") or ""
+    feedback_en = verdict.get("feedback_en_carousel") or ""
+    feedback_reddit = verdict.get("feedback_reddit_promo") or ""
+
+    for field in (feedback_ko, feedback_en, feedback_reddit):
+        if not isinstance(field, str):
+            field = str(field)
+
+    # Legacy combined field for any code that still reads critic_feedback.
+    combined_feedback = "\n\n".join(
+        part for part in [
+            f"[KO] {feedback_ko}" if feedback_ko and feedback_ko != "Pass" else "",
+            f"[EN] {feedback_en}" if feedback_en and feedback_en != "Pass" else "",
+            f"[Reddit] {feedback_reddit}" if feedback_reddit and feedback_reddit != "Pass" else "",
+        ]
+        if part
+    ) or "Pass"
 
     # Trust the model's `approved` only if it's consistent with the score;
     # otherwise enforce the threshold ourselves.
@@ -137,7 +151,10 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "critic_score": score,
-        "critic_feedback": feedback,
+        "critic_feedback": combined_feedback,
+        "critic_feedback_ko": feedback_ko,
+        "critic_feedback_en": feedback_en,
+        "critic_feedback_reddit": feedback_reddit,
         "approved": approved,
         "history": [{"node": "critic", "score": score, "approved": approved}],
     }

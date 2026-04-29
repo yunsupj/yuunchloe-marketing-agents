@@ -118,6 +118,10 @@ Punchy, cynical, 하이퍼-로컬, 구체적 — 이 네 단어가 모든 슬라
 - 절대 "Check out our amazing app!" 류 cringe CTA 금지. CTA 는 마지막 한 줄에
   덤덤하게: "If anyone wants to try it: [link in profile]." 정도.
 - 길이: 약 150-300 단어. 너무 짧으면 cheap, 너무 길면 안 읽힘.
+- NEVER pitch the app's features in the middle of the narrative. Keep the entire
+  story 100% about the local spot/food/topic. Only drop the app name at the VERY
+  END as a casual footnote: "btw, if you want more spots like this, I built an
+  app called Kkaertalk." — one sentence, last paragraph only.
 
 [Caption Strategy]
 - caption_ko: Instagram / TikTok / 카카오 채널 KO 캡션. 짧은 hook 한 줄 + 줄바꿈 +

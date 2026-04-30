@@ -210,17 +210,15 @@ def _make_app_promo_slide(
     """Slide 4 — always the same logo URL; copy varies by locale."""
     if locale == "en":
         default_title = DEFAULT_APP_PROMO_TITLE_EN
-        default_desc = DEFAULT_APP_PROMO_DESC_EN
     else:
         default_title = DEFAULT_APP_PROMO_TITLE_KO
-        default_desc = DEFAULT_APP_PROMO_DESC_KO
 
     return {
         "slide_number": EXPECTED_SLIDE_COUNT,
         "photo_instruction": "Use app_promo logo (hardcoded downstream).",
         "source_url": APP_PROMO_LOGO_URL,  # downstream Designer reads this directly
         "title": title.strip() or default_title,
-        "description": description.strip() or default_desc,
+        "description": "",  # always empty — clean title-only CTA slide
     }
 
 

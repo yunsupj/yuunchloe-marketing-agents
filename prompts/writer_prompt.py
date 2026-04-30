@@ -358,11 +358,11 @@ The Critic reviewed your draft section by section.
 - feedback_reddit_promo: {feedback_reddit}
 
 1. If a feedback field says "Pass", DO NOT change that section. Keep it exactly as it was.
-2. If a feedback field contains BAD → GOOD, rewrite that specific sentence using concrete
-   nouns and facts from the Research Notes — not abstract adjectives.
-3. IGNORE any Critic suggestion that asks you to use banned words like "경험해보세요",
-   "즐겨보세요", or "최고의". If the Critic suggests these, keep your original text.
-4. After applying fixes, output the full 6-key JSON OBJECT unchanged except for the
+2. If a feedback field contains "[BANNED] 발견: '<phrase>'", you MUST rewrite that section
+   to completely remove the banned phrase. Replace it with a dry, concrete factual noun or
+   description from the Research Notes.
+3. NEVER use any words from the Banned Phrases list.
+4. After applying fixes, output the full 7-key JSON OBJECT unchanged except for the
    corrected sections. Do NOT change sections that received "Pass".
 
 출력 형식은 동일하게 7-키 JSON OBJECT (_internal_monologue / og_category_tag / carousel_ko / carousel_en /

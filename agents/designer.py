@@ -40,7 +40,7 @@ IMAGEN_MODEL = "imagen-4-ultra"
 # Fallback for the dynamic orange-pill category badge when a slide is missing
 # the field (e.g. legacy carousels or the hardcoded app_promo). Kept in lockstep
 # with agents/writer.py::DEFAULT_CONTENT_CATEGORY.
-DEFAULT_CONTENT_CATEGORY = "NEIGHBORHOOD CHATTER"
+DEFAULT_CONTENT_CATEGORY = "깨알톡 · LOCAL"
 
 
 # =============================================================================
@@ -224,10 +224,19 @@ def _generate_image(prompt: str) -> tuple[str, str]:
 # =============================================================================
 
 
-def _apply_html_template(image_url: str, text: str, category: str) -> bytes:
+def _apply_html_template(
+    image_url: str,
+    text: str,
+    category: str,
+    *,
+    is_cta: bool = False,
+) -> bytes:
     """
     Render the final slide image by calling the external Next.js Vercel OG
     image-generation engine. Returns the rendered PNG bytes.
+
+    `is_cta=True` appends `&is_cta_slide=true` so the OG engine can apply
+    the fixed Slide-4 lockup layout instead of the Lower-Third layout.
 
     URL-encoding strategy:
         `image_url`, `text`, and `category` all go through `quote_plus`, which
@@ -250,6 +259,8 @@ def _apply_html_template(image_url: str, text: str, category: str) -> bytes:
         f"{og_base_url}/api/og"
         f"?image={encoded_img}&text={encoded_text}&category={encoded_category}"
     )
+    if is_cta:
+        endpoint += "&is_cta_slide=true"
 
     try:
         resp = requests.get(endpoint, timeout=20)
@@ -350,6 +361,7 @@ def _render_slide(
     raw_pool: list[str],
     *,
     suffix: str = "",
+    og_category_tag: str = "",
 ) -> tuple[str, str]:
     """
     Render one slide via the OG template, with strict photo-first priority:
@@ -371,9 +383,20 @@ def _render_slide(
 
     `suffix` disambiguates uploads between KO/EN tracks of the same slide
     so the bucket key doesn't collide.
+
+    `og_category_tag` (from Writer state) overrides the per-slide
+    `content_category` so all slides in the carousel share the same pill.
+
+    Slide 4 is the CTA/app-promo slide — `is_cta_slide=true` is appended to
+    the OG URL so the design engine renders the fixed lockup layout.
     """
     overlay_text = _slide_overlay_text(slide)
-    category = slide.get("content_category") or DEFAULT_CONTENT_CATEGORY
+    category = (
+        og_category_tag.strip()
+        or slide.get("content_category")
+        or DEFAULT_CONTENT_CATEGORY
+    )
+    is_cta = slide.get("slide_number") == 4
 
     # Ordered candidate list. kind in {"photo", "ai"}.
     # For "photo", payload is a URL; for "ai", payload is the photo_instruction.
@@ -417,7 +440,7 @@ def _render_slide(
                 continue
 
         try:
-            png_bytes = _apply_html_template(candidate_url, overlay_text, category)
+            png_bytes = _apply_html_template(candidate_url, overlay_text, category, is_cta=is_cta)
         except Exception as e:
             print(
                 f"[Designer] slide {index} {model_tag} render failed "
@@ -442,6 +465,7 @@ def _render_carousel(
     raw_pool: list[str],
     *,
     locale: str,
+    og_category_tag: str = "",
 ) -> tuple[list[str], list[str]]:
     """
     Render every slide in `carousel`, returning `(urls, model_tags)` aligned
@@ -453,7 +477,9 @@ def _render_carousel(
     for i, slide in enumerate(carousel, start=1):
         if not isinstance(slide, dict):
             continue
-        final_url, model_tag = _render_slide(slide, i, raw_pool, suffix=locale)
+        final_url, model_tag = _render_slide(
+            slide, i, raw_pool, suffix=locale, og_category_tag=og_category_tag
+        )
         urls.append(final_url)
         if model_tag:
             model_tags.append(model_tag)
@@ -490,11 +516,13 @@ def designer_node(state: dict[str, Any]) -> dict[str, Any]:
     pool_ko = list(base_pool)
     pool_en = list(base_pool)
 
+    og_category_tag = (state.get("og_category_tag") or DEFAULT_CONTENT_CATEGORY).strip()
+
     carousel_urls_ko, model_tags_ko = _render_carousel(
-        carousel_ko, pool_ko, locale="ko"
+        carousel_ko, pool_ko, locale="ko", og_category_tag=og_category_tag
     )
     carousel_urls_en, model_tags_en = _render_carousel(
-        carousel_en, pool_en, locale="en"
+        carousel_en, pool_en, locale="en", og_category_tag=og_category_tag
     )
 
     all_model_tags = model_tags_ko + model_tags_en

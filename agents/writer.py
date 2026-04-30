@@ -44,7 +44,7 @@ APP_PROMO_LOGO_URL = (
     "https://aaicoyblsmdjoqmykivx.supabase.co/storage/v1/object/"
     "public/marketing-assets/logo/logo.png"
 )
-DEFAULT_APP_PROMO_TITLE_KO = "우리 동네 찐로컬 정보는 깨알톡에서"
+DEFAULT_APP_PROMO_TITLE_KO = "우리 동네 진짜 정보,\n깨알톡 에서"
 DEFAULT_APP_PROMO_DESC_KO = "동네 이웃들이 남긴 리얼 후기 확인하기"
 DEFAULT_APP_PROMO_TITLE_EN = "Real local intel, in your pocket."
 DEFAULT_APP_PROMO_DESC_EN = "Built by a local. Try it."

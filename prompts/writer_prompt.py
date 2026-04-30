@@ -141,9 +141,14 @@ caption_ko 는 반드시 아래 순서와 구조를 그대로 따라라:
   5. credit: "by. #깨알톡 ✍🏻"
   6. 해시태그 3-5개 (#지역명맛집 류, #깨알톡 포함)
 
-caption_en: Reddit profile post / cross-post 용 짧은 EN 캡션. 1-2 paragraph,
-  hashtag 없음 (Reddit 은 hashtag 안 씀). 본문 끝에 "More like this on r/<sub>" /
-  "Built by a local dev." 같은 single-line tag.
+caption_en: Instagram US / Reddit 용 영어 캡션. caption_ko 와 동일한 구조로 작성:
+  1. Aesthetic intro line (noun-ending / impact phrase style in English)
+  2. ⭐️ Editor's picks with 👉🏻 descriptions
+  3. 💡 Practical tip
+  4. 📍 Address: [Same rule as caption_ko — include only if address is in Research Notes,
+     skip entirely otherwise — no "None", no "N/A"]
+  5. "by. #Kkaertalk ✍🏻"
+  hashtag 없음 (Reddit 은 hashtag 안 씀).
 
 [🚨 ABSOLUTE ANTI-HALLUCINATION RULES — 위반 시 자동 reject 🚨]
 - carousel_ko / carousel_en 의 photo_instruction 는 첨부된 raw photo 들을 *지칭*만
@@ -161,6 +166,8 @@ caption_en: Reddit profile post / cross-post 용 짧은 EN 캡션. 1-2 paragraph
 - Slide 3 (Story): 분위기 / 경험 / 솔직한 단점 + 결론.
 - Slide 4 (App Promo CTA): 항상 logo + CTA. photo_instruction 는
   "Use app_promo logo (hardcoded downstream)" 라고만 적어라.
+  🔒 **KO Slide 4 title 은 반드시 정확히 이 두 줄이어야 한다 (다른 문구 금지):**
+  "우리 동네 진짜 정보,\n깨알톡 에서"
 
 [Image Prompt — Mood-Aware Rules (raw photo 0장일 때만)]
 - 부정/하소연/스트레스 톤 → moody, dark, cinematic B-roll only.
@@ -301,8 +308,8 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
     {{
       "slide_number": 4,
       "photo_instruction": "Use app_promo logo (hardcoded downstream).",
-      "title": "<KO CTA 헤드라인>",
-      "description": "<KO CTA 보조 카피>"
+      "title": "우리 동네 진짜 정보,\n깨알톡 에서",
+      "description": "<KO CTA 보조 카피 — 한 줄>"
     }}
   ],
   "carousel_en": [
@@ -332,8 +339,8 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
     }}
   ],
   "reddit_promo_text": "<Catchy English title line\\n\\nMulti-paragraph body following Indie-Dev OR Tier-List angle, 150-300 words, line breaks via \\n\\n>",
-  "caption_ko": "<KO IG/TikTok caption with hashtags + app store CTA>",
-  "caption_en": "<EN Reddit profile-post caption, 1-2 paragraphs, no hashtags>"
+  "caption_ko": "<KO IG/TikTok caption — 6-step structure from [Caption Strategy]: intro / ⭐️picks / 💡tip / 📍address-or-skip / by.#깨알톡 / hashtags>",
+  "caption_en": "<EN caption — mirrors caption_ko structure: intro / ⭐️picks / 💡tip / 📍address-or-skip / by.#Kkaertalk / no hashtags>"
 }}
 
 ⚠️ 모든 7 개 키 필수 (_internal_monologue, og_category_tag 포함). carousel_ko / carousel_en 은 정확히 4 개 슬라이드. slide_number

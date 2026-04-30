@@ -78,8 +78,12 @@ class GraphState(TypedDict, total=False):
     reddit_promo_text: str              # native English Reddit-style long-form promo
     caption_ko: str                     # IG/TikTok caption (KO) with hashtags
     caption_en: str                     # Reddit profile-post caption (EN)
+    og_category_tag: str                # Writer-generated category pill (e.g. "맛집 · LOCAL PICK")
     revision: int                       # how many Writer passes have run
-    critic_feedback: str                # latest Critic notes for the Writer
+    critic_feedback: str                # latest Critic notes for the Writer (legacy combined)
+    critic_feedback_ko: str             # specific KO feedback
+    critic_feedback_en: str             # specific EN feedback
+    critic_feedback_reddit: str         # specific Reddit feedback
     critic_score: float                 # 0.0 – 1.0; compared to min_quality_score
     approved: bool                      # Critic's gate; True = exit loop
 

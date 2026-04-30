@@ -359,11 +359,14 @@ The Critic reviewed your previous draft.
 - feedback_reddit_promo: {feedback_reddit}
 
 [EMERGENCY REVISION PROTOCOL: How to Break the Loop]
-Your score is stuck below 0.85 because you keep using BANNED words in the KO sections (e.g., '화려한', '다채로운', '진짜', '특별한'). You MUST break your habit of using generic adjectives.
+Your score is stuck below 0.85 because you keep using BANNED words in the KO sections (e.g., '화려한', '다채로운', '진짜', '특별한', '비주얼'). You MUST break your habit of using generic adjectives.
 
-1. If a feedback field says "Pass" → DO NOT touch that section. Output it exactly as it was.
+Your EXACT previous KO carousel JSON is provided below in [Your Previous KO Carousel — BASE for revision].
+USE IT AS YOUR STARTING POINT. Do NOT regenerate from scratch.
+
+1. If a feedback field says "Pass" → DO NOT touch that section. Copy it VERBATIM from [Your Previous KO Carousel].
 2. If a feedback field contains "[BANNED] 발견: '<phrase>'" → HARD FIX REQUIRED.
-   👉 **STEP 1 (LOCATE):** Find the exact sentence that contains the banned `<phrase>`.
+   👉 **STEP 1 (LOCATE):** Find the exact slide in [Your Previous KO Carousel] that contains the banned `<phrase>`.
    👉 **STEP 2 (DESTROY & REBUILD):** Do NOT try to tweak or rephrase the sentence. Delete the entire sentence in your mind.
    👉 **STEP 3 (FACT ONLY):** Replace that sentence using ONLY hard facts from the `[Local Research Notes]`. Use concrete nouns, numbers, ingredients, or specific location details.
       * BAD REVISION (Swapping for another generic word): "화려한 조명" -> "멋진 조명" (X - Will fail again)
@@ -372,9 +375,9 @@ Your score is stuck below 0.85 because you keep using BANNED words in the KO sec
       * GOOD REVISION: "다채로운 메뉴" -> "테이블에서 직접 굽는 와규와 20가지 반찬" (O)
    👉 **STEP 4 (FINAL CHECK):** Scan your new sentence against the `[과장/광고성]`, `[AI 단골 수식어]`, `[블로거식 제안]` banned lists. If there is EVEN ONE generic adjective, you will score 0.0 and fail completely.
 
-3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → DO NOTHING to this section. Keep it exactly as it was in the previous draft.
+3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → DO NOTHING to this section. Keep it exactly as it was in [Your Previous KO Carousel].
 
-After applying ONLY the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections.
+Take [Your Previous KO Carousel] as your base. Apply ONLY the [BANNED] fixes to the affected slide(s). Output the full 7-key JSON OBJECT with everything else unchanged.
 """
 
 

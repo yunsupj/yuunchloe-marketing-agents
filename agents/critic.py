@@ -96,10 +96,16 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
     draft_text_ko = (state.get("draft_text_ko") or state.get("draft") or "").strip()
     draft_text_en = (state.get("draft_text_en") or "").strip()
     reddit_promo_text = (state.get("reddit_promo_text") or "").strip()
+    caption_ko = (state.get("caption_ko") or "").strip()
+    caption_en = (state.get("caption_en") or "").strip()
 
     combined_draft = f"[🇰🇷 KO Carousel]\n{draft_text_ko}"
+    if caption_ko:
+        combined_draft += f"\n\n[🇰🇷 KO Caption]\n{caption_ko}"
     if draft_text_en:
         combined_draft += f"\n\n[🇺🇸 EN Carousel]\n{draft_text_en}"
+    if caption_en:
+        combined_draft += f"\n\n[🇺🇸 EN Caption]\n{caption_en}"
     if reddit_promo_text:
         combined_draft += f"\n\n[🇺🇸 Reddit Promo]\n{reddit_promo_text}"
 
@@ -144,10 +150,7 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
         if part
     ) or "Pass"
 
-    # Trust the model's `approved` only if it's consistent with the score;
-    # otherwise enforce the threshold ourselves.
-    model_approved = bool(verdict.get("approved", False))
-    approved = model_approved and score >= APPROVAL_THRESHOLD
+    approved = score >= APPROVAL_THRESHOLD
 
     return {
         "critic_score": score,

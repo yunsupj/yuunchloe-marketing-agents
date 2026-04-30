@@ -54,12 +54,12 @@ DEFAULT_APP_PROMO_DESC_EN = "Built by a local. Try it."
 SLIDE_KEYS = ("slide_number", "photo_instruction", "title", "description")
 
 
-def _build_llm() -> ChatOpenAI:
+def _build_llm(temperature: float = 0.7) -> ChatOpenAI:
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         return ChatOpenAI(
             model="gpt-4o-mini",
-            temperature=0.7,
+            temperature=temperature,
             api_key=openai_key,
             max_retries=5,
         )
@@ -68,7 +68,7 @@ def _build_llm() -> ChatOpenAI:
     base_url = os.getenv("QWEN_BASE_URL")
     model = os.getenv("QWEN_MODEL_NAME", "qwen3.5-flash")
 
-    kwargs: dict[str, Any] = {"model": model, "temperature": 0.7, "max_retries": 5}
+    kwargs: dict[str, Any] = {"model": model, "temperature": temperature, "max_retries": 5}
     if qwen_key:
         kwargs["api_key"] = qwen_key
     if base_url:
@@ -118,6 +118,17 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
             feedback_en=feedback_en if feedback_en else "Pass",
             feedback_reddit=feedback_reddit if feedback_reddit else "Pass",
         )
+        prev_carousel_ko = state.get("carousel_ko") or []
+        if prev_carousel_ko:
+            prev_ko_str = json.dumps(prev_carousel_ko, ensure_ascii=False, indent=2)
+            prompt += (
+                "\n\n[Your Previous KO Carousel — BASE for revision]\n"
+                "Start from this exact JSON. Only modify slides that contain a [BANNED] phrase:\n"
+                f"{prev_ko_str}"
+            )
+        prev_caption_ko = (state.get("caption_ko") or "").strip()
+        if prev_caption_ko:
+            prompt += f"\n\n[Your Previous caption_ko — keep verbatim unless KO caption has [BANNED] feedback]\n{prev_caption_ko}"
 
     return prompt
 
@@ -340,7 +351,10 @@ def writer_node(state: dict[str, Any]) -> dict[str, Any]:
     human_msg = _build_human_message(state)
     photo_urls = _select_photo_urls(state)
 
-    llm = _build_llm()
+    # Lower temperature for revision passes so the model follows surgical
+    # fix instructions precisely rather than regenerating creatively.
+    temperature = 0.3 if revision > 1 else 0.7
+    llm = _build_llm(temperature=temperature)
     response = llm.invoke([SystemMessage(content=system_prompt), human_msg])
     raw = getattr(response, "content", str(response)) or ""
 

@@ -112,23 +112,17 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
     has_feedback = feedback_ko or feedback_en or feedback_reddit
 
     if revision > 0 and has_feedback:
+        prev_carousel = state.get("carousel_ko") or []
+        prev_caption = state.get("caption_ko") or ""
+
         prompt += WRITER_REVISION_SUFFIX.format(
             critic_score=critic_score,
             feedback_ko=feedback_ko if feedback_ko else "Pass",
             feedback_en=feedback_en if feedback_en else "Pass",
             feedback_reddit=feedback_reddit if feedback_reddit else "Pass",
+            previous_ko_carousel_json=json.dumps(prev_carousel, ensure_ascii=False, indent=2),
+            previous_ko_caption_json=json.dumps({"caption_ko": prev_caption}, ensure_ascii=False, indent=2),
         )
-        prev_carousel_ko = state.get("carousel_ko") or []
-        if prev_carousel_ko:
-            prev_ko_str = json.dumps(prev_carousel_ko, ensure_ascii=False, indent=2)
-            prompt += (
-                "\n\n[Your Previous KO Carousel — BASE for revision]\n"
-                "Start from this exact JSON. Only modify slides that contain a [BANNED] phrase:\n"
-                f"{prev_ko_str}"
-            )
-        prev_caption_ko = (state.get("caption_ko") or "").strip()
-        if prev_caption_ko:
-            prompt += f"\n\n[Your Previous caption_ko — keep verbatim unless KO caption has [BANNED] feedback]\n{prev_caption_ko}"
 
     return prompt
 

@@ -378,6 +378,13 @@ USE IT AS YOUR STARTING POINT. Do NOT regenerate from scratch.
 3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → DO NOTHING to this section. Keep it exactly as it was in [Your Previous KO Carousel].
 
 Take [Your Previous KO Carousel] as your base. Apply ONLY the [BANNED] fixes to the affected slide(s). Output the full 7-key JSON OBJECT with everything else unchanged.
+
+[Your Previous KO Carousel — BASE for revision]
+You MUST start from this exact JSON. Locate the banned phrase in here, apply the DESTROY & REBUILD protocol to that specific sentence, and leave the rest of the structure exactly as it is.
+{previous_ko_carousel_json}
+
+[Your Previous KO Caption — BASE for revision]
+{previous_ko_caption_json}
 """
 
 

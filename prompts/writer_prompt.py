@@ -351,19 +351,19 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
 
 WRITER_REVISION_SUFFIX = """
 
-[Critic Feedback — ACTION REQUIRED]
-The Critic reviewed your draft section by section.
+[Critic Feedback — ACTION REQUIRED 🚨]
+The Critic reviewed your draft and found critical errors. You MUST fix them.
 - feedback_ko_carousel: {feedback_ko}
 - feedback_en_carousel: {feedback_en}
 - feedback_reddit_promo: {feedback_reddit}
 
-1. If a feedback field says "Pass", DO NOT change that section. Keep it exactly as it was.
-2. If a feedback field contains "[BANNED] 발견: '<phrase>'", you MUST rewrite that section
-   to completely remove the banned phrase. Replace it with a dry, concrete factual noun or
-   description from the Research Notes.
-3. NEVER use any words from the Banned Phrases list.
-4. After applying fixes, output the full 7-key JSON OBJECT unchanged except for the
-   corrected sections. Do NOT change sections that received "Pass".
+[Revision Instructions]
+1. If a feedback field says "Pass", DO NOT touch that section. Output it exactly as it was.
+2. If a feedback field contains "[BANNED] 발견: '<phrase>'", it means you used a banned word (e.g., 'perfectly', 'must-try', '완벽하게', '최고의').
+   👉 **YOUR TASK:** Locate the sentence containing `<phrase>`. Completely rewrite that single sentence.
+   👉 **HOW TO REWRITE:** Remove the banned phrase entirely. Do NOT replace it with a synonym. Instead, describe a concrete visual detail or an objective fact from the Research Notes. (e.g., Change "Perfectly cooked sirloin" -> "Sirloin served with a side of greens").
+3. CRITICAL: Review your rewritten sentence against the `[Universal Negative Constraints]` list before generating the final JSON. If you use another banned word during revision, you will fail again.
+4. After applying fixes, output the full 7-key JSON OBJECT unchanged except for the corrected sections. Do NOT change sections that received "Pass".
 
 출력 형식은 동일하게 7-키 JSON OBJECT (_internal_monologue / og_category_tag / carousel_ko / carousel_en /
 reddit_promo_text / caption_ko / caption_en). list 만 출력하지 마라.

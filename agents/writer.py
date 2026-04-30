@@ -107,12 +107,16 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
     feedback_ko = state.get("critic_feedback_ko") or ""
     feedback_en = state.get("critic_feedback_en") or ""
     feedback_reddit = state.get("critic_feedback_reddit") or ""
+    critic_score = state.get("critic_score") or 0.0
+
     has_feedback = feedback_ko or feedback_en or feedback_reddit
+
     if revision > 0 and has_feedback:
         prompt += WRITER_REVISION_SUFFIX.format(
-            feedback_ko=feedback_ko or "Pass",
-            feedback_en=feedback_en or "Pass",
-            feedback_reddit=feedback_reddit or "Pass",
+            critic_score=critic_score,
+            feedback_ko=feedback_ko if feedback_ko else "Pass",
+            feedback_en=feedback_en if feedback_en else "Pass",
+            feedback_reddit=feedback_reddit if feedback_reddit else "Pass",
         )
 
     return prompt

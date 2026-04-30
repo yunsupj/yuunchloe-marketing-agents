@@ -351,23 +351,23 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
 
 WRITER_REVISION_SUFFIX = """
 
-[Critic Feedback — ACTION REQUIRED 🚨]
-The Critic reviewed your draft and found critical errors. You MUST fix them.
+[Critic Feedback — REVISION LOOP 🚨]
+The Critic reviewed your previous draft.
+- Current Score: {critic_score} (Target: 0.85+)
 - feedback_ko_carousel: {feedback_ko}
 - feedback_en_carousel: {feedback_en}
 - feedback_reddit_promo: {feedback_reddit}
 
-[Revision Instructions]
+[How to Increase Your Score]
+Your score is below 0.85 because you used BANNED words in the KO sections. Each banned word lowers your score.
 1. If a feedback field says "Pass" → DO NOT touch that section. Output it exactly as it was.
-2. If a feedback field contains "[BANNED] 발견: '<phrase>'" → HARD FIX REQUIRED (KO only).
-   👉 **YOUR TASK:** Locate the sentence containing `<phrase>`. Completely rewrite that single sentence.
-   👉 **HOW TO REWRITE:** Remove the banned phrase entirely. Do NOT replace it with a synonym. Instead, describe a concrete visual detail or an objective fact from the Research Notes. (e.g., Change "Perfectly cooked sirloin" -> "Sirloin served with a side of greens").
-   👉 CRITICAL: Before writing the fix, check it against `[Universal Negative Constraints]`. If your rewrite accidentally uses another banned word, you will fail again.
-3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → NO FIX NEEDED NOW. The pipeline is already approved. Keep that section exactly as it was. The warning is for future reference only.
-4. After applying only the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections. Do NOT change sections that received "Pass" or "[WARNING]".
+2. If a feedback field contains "[BANNED] 발견: '<phrase>'" → HARD FIX REQUIRED.
+   👉 **YOUR TASK:** Locate the sentence containing the banned `<phrase>`.
+   👉 **HOW TO REWRITE:** Remove the banned phrase entirely. Do NOT replace it with a synonym. Instead, describe a concrete visual detail or an objective fact from the Research Notes. (e.g., Change "완벽하게 조리된" -> "그릴 자국이 선명한").
+   👉 CRITICAL: Before writing the fix, check it against the `[과장/광고성]`, `[AI 단골 수식어]`, `[블로거식 제안]` banned lists. If you accidentally use another banned word (like '특별한' or '다채로운'), your score will drop again.
+3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → The EN pipeline is fine. You do not need to rewrite this section right now.
 
-출력 형식은 동일하게 7-키 JSON OBJECT (_internal_monologue / og_category_tag / carousel_ko / carousel_en /
-reddit_promo_text / caption_ko / caption_en). list 만 출력하지 마라.
+After applying only the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections.
 """
 
 

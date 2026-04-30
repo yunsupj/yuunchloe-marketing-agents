@@ -358,12 +358,13 @@ The Critic reviewed your draft and found critical errors. You MUST fix them.
 - feedback_reddit_promo: {feedback_reddit}
 
 [Revision Instructions]
-1. If a feedback field says "Pass", DO NOT touch that section. Output it exactly as it was.
-2. If a feedback field contains "[BANNED] 발견: '<phrase>'", it means you used a banned word (e.g., 'perfectly', 'must-try', '완벽하게', '최고의').
+1. If a feedback field says "Pass" → DO NOT touch that section. Output it exactly as it was.
+2. If a feedback field contains "[BANNED] 발견: '<phrase>'" → HARD FIX REQUIRED (KO only).
    👉 **YOUR TASK:** Locate the sentence containing `<phrase>`. Completely rewrite that single sentence.
    👉 **HOW TO REWRITE:** Remove the banned phrase entirely. Do NOT replace it with a synonym. Instead, describe a concrete visual detail or an objective fact from the Research Notes. (e.g., Change "Perfectly cooked sirloin" -> "Sirloin served with a side of greens").
-3. CRITICAL: Review your rewritten sentence against the `[Universal Negative Constraints]` list before generating the final JSON. If you use another banned word during revision, you will fail again.
-4. After applying fixes, output the full 7-key JSON OBJECT unchanged except for the corrected sections. Do NOT change sections that received "Pass".
+   👉 CRITICAL: Before writing the fix, check it against `[Universal Negative Constraints]`. If your rewrite accidentally uses another banned word, you will fail again.
+3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → NO FIX NEEDED NOW. The pipeline is already approved. Keep that section exactly as it was. The warning is for future reference only.
+4. After applying only the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections. Do NOT change sections that received "Pass" or "[WARNING]".
 
 출력 형식은 동일하게 7-키 JSON OBJECT (_internal_monologue / og_category_tag / carousel_ko / carousel_en /
 reddit_promo_text / caption_ko / caption_en). list 만 출력하지 마라.

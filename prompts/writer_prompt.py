@@ -351,23 +351,30 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
 
 WRITER_REVISION_SUFFIX = """
 
-[Critic Feedback — REVISION LOOP 🚨]
+[Critic Feedback — REVISION LOOP 🚨 FATAL ERROR]
 The Critic reviewed your previous draft.
 - Current Score: {critic_score} (Target: 0.85+)
 - feedback_ko_carousel: {feedback_ko}
 - feedback_en_carousel: {feedback_en}
 - feedback_reddit_promo: {feedback_reddit}
 
-[How to Increase Your Score]
-Your score is below 0.85 because you used BANNED words in the KO sections. Each banned word lowers your score.
+[EMERGENCY REVISION PROTOCOL: How to Break the Loop]
+Your score is stuck below 0.85 because you keep using BANNED words in the KO sections (e.g., '화려한', '다채로운', '진짜', '특별한'). You MUST break your habit of using generic adjectives.
+
 1. If a feedback field says "Pass" → DO NOT touch that section. Output it exactly as it was.
 2. If a feedback field contains "[BANNED] 발견: '<phrase>'" → HARD FIX REQUIRED.
-   👉 **YOUR TASK:** Locate the sentence containing the banned `<phrase>`.
-   👉 **HOW TO REWRITE:** Remove the banned phrase entirely. Do NOT replace it with a synonym. Instead, describe a concrete visual detail or an objective fact from the Research Notes. (e.g., Change "완벽하게 조리된" -> "그릴 자국이 선명한").
-   👉 CRITICAL: Before writing the fix, check it against the `[과장/광고성]`, `[AI 단골 수식어]`, `[블로거식 제안]` banned lists. If you accidentally use another banned word (like '특별한' or '다채로운'), your score will drop again.
-3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → The EN pipeline is fine. You do not need to rewrite this section right now.
+   👉 **STEP 1 (LOCATE):** Find the exact sentence that contains the banned `<phrase>`.
+   👉 **STEP 2 (DESTROY & REBUILD):** Do NOT try to tweak or rephrase the sentence. Delete the entire sentence in your mind.
+   👉 **STEP 3 (FACT ONLY):** Replace that sentence using ONLY hard facts from the `[Local Research Notes]`. Use concrete nouns, numbers, ingredients, or specific location details.
+      * BAD REVISION (Swapping for another generic word): "화려한 조명" -> "멋진 조명" (X - Will fail again)
+      * GOOD REVISION (Fact-based): "화려한 조명" -> "어두운 실내를 채우는 네온사인" (O)
+      * BAD REVISION: "다채로운 메뉴" -> "다양한 선택지" (X - Will fail again)
+      * GOOD REVISION: "다채로운 메뉴" -> "테이블에서 직접 굽는 와규와 20가지 반찬" (O)
+   👉 **STEP 4 (FINAL CHECK):** Scan your new sentence against the `[과장/광고성]`, `[AI 단골 수식어]`, `[블로거식 제안]` banned lists. If there is EVEN ONE generic adjective, you will score 0.0 and fail completely.
 
-After applying only the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections.
+3. If a feedback field contains "[WARNING] Avoid using '<phrase>' next time." → DO NOTHING to this section. Keep it exactly as it was in the previous draft.
+
+After applying ONLY the [BANNED] fixes, output the full 7-key JSON OBJECT unchanged except for the corrected KO sections.
 """
 
 

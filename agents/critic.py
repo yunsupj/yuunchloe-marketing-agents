@@ -99,6 +99,36 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
     caption_ko = (state.get("caption_ko") or "").strip()
     caption_en = (state.get("caption_en") or "").strip()
 
+    # Empty/trivial-draft guard — must run BEFORE banned-word scoring.
+    # An empty KO draft trivially has 0 banned words and would otherwise
+    # auto-pass with score 0.9. The "---" check requires at least one slide
+    # separator (i.e. at least 2 of slides 1-3 carry real content).
+    has_meaningful_content = len(draft_text_ko) > 30 and "---" in draft_text_ko
+    if not has_meaningful_content:
+        print(
+            "[Critic] Intercepted empty/trivial KO draft "
+            f"(len={len(draft_text_ko)}). Forcing score=0.0, approved=False."
+        )
+        empty_feedback_ko = (
+            "[EMPTY] Draft has no meaningful content for slides 1-3. "
+            "You MUST write actual text for title and description."
+        )
+        empty_feedback_other = "[EMPTY] Draft has no content."
+        return {
+            "critic_score": 0.0,
+            "critic_feedback": empty_feedback_ko,
+            "critic_feedback_ko": empty_feedback_ko,
+            "critic_feedback_en": empty_feedback_other,
+            "critic_feedback_reddit": empty_feedback_other,
+            "approved": False,
+            "history": [{
+                "node": "critic",
+                "score": 0.0,
+                "approved": False,
+                "empty_draft_intercept": True,
+            }],
+        }
+
     combined_draft = f"[🇰🇷 KO Carousel]\n{draft_text_ko}"
     if caption_ko:
         combined_draft += f"\n\n[🇰🇷 KO Caption]\n{caption_ko}"

@@ -134,7 +134,12 @@ def get_local_hotplace() -> str:
         return random.choice(fallback)
 
     try:
-        resp = client.table("marketing_hotspots").select("name, address").execute()
+        resp = (
+            client.table("marketing_hotspots")
+            .select("id, name, address")
+            .eq("status", "pending")
+            .execute()
+        )
     except Exception as e:
         print(f"[auto] marketing_hotspots query failed: {e!r} — using fallback.")
         return random.choice(fallback)
@@ -145,10 +150,26 @@ def get_local_hotplace() -> str:
         if isinstance(row, dict) and (row.get("name") or "").strip()
     ]
     if not valid_rows:
-        print("[auto] marketing_hotspots returned no rows — using fallback.")
+        print("[auto] marketing_hotspots returned no pending rows — using fallback.")
         return random.choice(fallback)
 
     row = random.choice(valid_rows)
+
+    # Atomically mark this row as 'processing' so the next cron run cannot
+    # re-pick it. Without this write, the fetch query would keep selecting
+    # the same row from the unmodified pending pool.
+    row_id = row.get("id")
+    if row_id is not None:
+        try:
+            client.table("marketing_hotspots").update(
+                {"status": "processing"}
+            ).eq("id", row_id).execute()
+        except Exception as e:
+            print(
+                f"[auto] Failed to mark hotspot id={row_id} as processing: "
+                f"{e!r} — proceeding anyway."
+            )
+
     name = row.get("name", "").strip()
     address = (row.get("address") or "").strip()
     return f"{name} (Address: {address})" if address else name

@@ -66,6 +66,7 @@ def build_initial_state(
     research_notes: str,
     profile_override: str | None = None,
     region_override: str | None = None,
+    hotspot_id: Any = None,
 ) -> dict[str, Any]:
     """
     Resolve the active profile + target region from config and assemble the
@@ -106,6 +107,7 @@ def build_initial_state(
         "target_region": target_region,
         "pipeline_config": config.get("pipeline") or {},
         "research_notes": research_notes,
+        "hotspot_id": str(hotspot_id) if hotspot_id is not None else None,
         "revision": 0,
         "history": [],
     }

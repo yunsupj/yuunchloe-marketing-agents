@@ -116,63 +116,61 @@ def get_hot_community_topic() -> str | None:
 # =============================================================================
 
 
-def get_local_hotplace() -> str:
+def get_local_hotplace() -> tuple[str, Any] | tuple[None, None]:
     """
-    Pull the hotplace pool from Supabase (`marketing_hotspots` table) and
-    return one at random. On any failure (no client, query error, empty
-    table) silently degrades to a tiny in-code fallback list so the daily
-    post never misses.
+    Pull a single pending, fully-populated hotspot from the DB and return
+    (topic_string, hotspot_id). Returns (None, None) on any failure or empty
+    queue. Callers MUST abort rather than proceeding with a None topic.
     """
-    fallback = [
-        "Torrance Mitsuwa 푸드코트",
-        "K-town BCD Tofu House (북창동순두부 본점)",
-        "Irvine Spectrum Center",
-    ]
-
     client = _build_supabase_client()
     if client is None:
-        return random.choice(fallback)
+        print("[auto] Supabase unavailable — cannot fetch hotspot.")
+        return None, None
 
     try:
         resp = (
             client.table("marketing_hotspots")
-            .select("id, name, address")
+            .select("id, name, address, photo_urls")
             .eq("status", "pending")
             .execute()
         )
     except Exception as e:
-        print(f"[auto] marketing_hotspots query failed: {e!r} — using fallback.")
-        return random.choice(fallback)
+        print(f"[auto] marketing_hotspots query failed: {e!r}")
+        return None, None
 
     rows = getattr(resp, "data", None) or []
+    # Only accept rows with a name, a real address, AND at least one photo.
     valid_rows = [
         row for row in rows
-        if isinstance(row, dict) and (row.get("name") or "").strip()
+        if (
+            isinstance(row, dict)
+            and (row.get("name") or "").strip()
+            and (row.get("address") or "").strip()
+            and row.get("photo_urls")
+        )
     ]
     if not valid_rows:
-        print("[auto] marketing_hotspots returned no pending rows — using fallback.")
-        return random.choice(fallback)
+        print(
+            "[auto] No valid hotspots found in DB. "
+            "Need: status='pending' + address + photo_urls."
+        )
+        return None, None
 
     row = random.choice(valid_rows)
-
-    # Atomically mark this row as 'processing' so the next cron run cannot
-    # re-pick it. Without this write, the fetch query would keep selecting
-    # the same row from the unmodified pending pool.
     row_id = row.get("id")
+
+    # Mark as 'processing' so the next cron run cannot re-pick this row.
     if row_id is not None:
         try:
             client.table("marketing_hotspots").update(
                 {"status": "processing"}
             ).eq("id", row_id).execute()
         except Exception as e:
-            print(
-                f"[auto] Failed to mark hotspot id={row_id} as processing: "
-                f"{e!r} — proceeding anyway."
-            )
+            print(f"[auto] Failed to mark hotspot id={row_id} as processing: {e!r} — proceeding.")
 
     name = row.get("name", "").strip()
-    address = (row.get("address") or "").strip()
-    return f"{name} (Address: {address})" if address else name
+    address = row.get("address", "").strip()
+    return f"{name} (Address: {address})", row_id
 
 
 # =============================================================================
@@ -189,29 +187,36 @@ STRATEGY_TO_PROFILE = {
 
 def _resolve_strategy_and_topic(
     forced: str | None,
-) -> tuple[str, str]:
+) -> tuple[str, str, Any]:
     """
-    Returns (strategy, topic). Honors --strategy override, otherwise rolls
-    a 70/30 weighted dice and falls back gracefully when the community
-    source is empty.
+    Returns (strategy, topic, hotspot_id). hotspot_id is None for the
+    community strategy (no hotspot row involved). Raises SystemExit on abort.
     """
     if forced == "community":
         topic = get_hot_community_topic()
         if topic is None:
             print("[auto] Forced community strategy but no topic — aborting.")
             raise SystemExit(2)
-        return "community", topic
+        return "community", topic, None
 
     if forced == "hotplace":
-        return "hotplace", get_local_hotplace()
+        topic, hotspot_id = get_local_hotplace()
+        if topic is None:
+            print("[auto] Pipeline aborted because no valid hotplace topic was found.")
+            raise SystemExit(0)
+        return "hotplace", topic, hotspot_id
 
     # auto: 70% community, 30% hotplace, with hotplace fallback if needed.
     if random.random() < 0.7:
         topic = get_hot_community_topic()
         if topic is not None:
-            return "community", topic
+            return "community", topic, None
         print("[auto] Community source unavailable — falling back to hotplace.")
-    return "hotplace", get_local_hotplace()
+    topic, hotspot_id = get_local_hotplace()
+    if topic is None:
+        print("[auto] Pipeline aborted because no valid hotplace topic was found.")
+        raise SystemExit(0)
+    return "hotplace", topic, hotspot_id
 
 
 def _print_summary(
@@ -252,7 +257,7 @@ def _print_summary(
 
 
 def run_daily_marketing(forced_strategy: str | None = None) -> int:
-    strategy, topic = _resolve_strategy_and_topic(forced_strategy)
+    strategy, topic, hotspot_id = _resolve_strategy_and_topic(forced_strategy)
     profile = STRATEGY_TO_PROFILE[strategy]
 
     print(
@@ -265,6 +270,7 @@ def run_daily_marketing(forced_strategy: str | None = None) -> int:
         config,
         research_notes=topic,
         profile_override=profile,
+        hotspot_id=hotspot_id,
     )
 
     try:

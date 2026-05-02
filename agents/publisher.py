@@ -113,6 +113,9 @@ def _insert_pending_row(
     carousel_urls_ko: list[str] | None = None,
     carousel_urls_en: list[str] | None = None,
     reddit_promo_text: str = "",
+    caption_ko: str = "",
+    caption_en: str = "",
+    hotspot_id: str | None = None,
 ) -> str | None:
     """
     Insert a row into `marketing_posts` and return the new row's id (as str)
@@ -120,16 +123,20 @@ def _insert_pending_row(
     stored in their own columns so the Make.com publishing step can dispatch
     each channel independently after human approval.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "topic": topic,
         "draft_text_ko": draft_text_ko,
         "draft_text_en": draft_text_en,
         "carousel_urls_ko": carousel_urls_ko or [],
         "carousel_urls_en": carousel_urls_en or [],
         "reddit_promo_text": reddit_promo_text,
+        "caption_ko": caption_ko,
+        "caption_en": caption_en,
         "subreddits": subreddits,
         "status": "pending",
     }
+    if hotspot_id is not None:
+        payload["hotspot_id"] = hotspot_id
     try:
         resp = client.table("marketing_posts").insert(payload).execute()
     except Exception as e:
@@ -340,6 +347,9 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
+    caption_en = (state.get("caption_en") or "").strip()
+    hotspot_id = state.get("hotspot_id") or None
+
     post_id = _insert_pending_row(
         client,
         topic,
@@ -349,6 +359,9 @@ def publisher_node(state: dict[str, Any]) -> dict[str, Any]:
         carousel_urls_ko=carousel_urls_ko,
         carousel_urls_en=carousel_urls_en,
         reddit_promo_text=reddit_promo_text,
+        caption_ko=caption_ko,
+        caption_en=caption_en,
+        hotspot_id=hotspot_id,
     )
     if post_id is None:
         return {

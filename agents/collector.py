@@ -31,8 +31,16 @@ from prompts.collector_prompt import (
 
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search"
+GOOGLE_PLACES_ENDPOINT = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+GOOGLE_PLACES_PHOTO_ENDPOINT = "https://maps.googleapis.com/maps/api/place/photo"
 MAX_SNIPPETS = 4
 MAX_PHOTOS = 6
+
+# Gatekeeper prompt — decides whether a community topic names a specific local
+# business (→ search query) or is generic chatter (→ "NONE").
+GATEKEEPER_SYSTEM_PROMPT = """당신은 장소 판별기입니다. 주어진 커뮤니티 게시글 주제를 분석하세요.
+만약 주제가 '특정 식당, 카페, 명소, 병원, 상호명'을 명확히 지칭하거나 리뷰/추천하는 글이라면, 구글 맵스에서 검색할 수 있는 정확한 검색어(예: 단비커피 토런스)를 출력하세요.
+만약 주제가 단순 동네 수다, 푸념, 질문(예: "오늘 날씨 덥네요", "이삿짐 센터 추천해주세요")이거나 특정 상호명이 없다면, 반드시 대문자로 'NONE' 이라고만 출력하세요."""
 
 
 # =============================================================================
@@ -124,6 +132,84 @@ def get_local_hotplace(topic: str) -> list[str]:
 
 
 # =============================================================================
+# Gatekeeper — decides if a topic names a specific local business
+# =============================================================================
+
+
+def _run_gatekeeper(topic: str, region_label: str) -> str:
+    """
+    Returns either:
+      - A Google Maps search query string (e.g. "단비커피 토런스") if the topic
+        names a specific business.
+      - The string "NONE" if the topic is generic chatter with no identifiable
+        business.
+    """
+    try:
+        llm = _build_prompt_llm()
+        response = llm.invoke(
+            [
+                SystemMessage(content=GATEKEEPER_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=f"커뮤니티 게시글 주제: {topic}\n지역: {region_label}"
+                ),
+            ]
+        )
+        result = (getattr(response, "content", str(response)) or "").strip()
+        return result if result else "NONE"
+    except Exception as e:
+        print(f"[Collector] Gatekeeper LLM failed: {e!r} — defaulting to NONE.")
+        return "NONE"
+
+
+# =============================================================================
+# Google Places Text Search
+# =============================================================================
+
+
+def _fetch_google_places(
+    search_query: str, api_key: str
+) -> tuple[list[str], str | None]:
+    """
+    Call the Google Places Text Search API.
+    Returns (photo_urls, found_address) where photo_urls is a list of up to
+    MAX_PHOTOS direct photo URLs and found_address is the first result's
+    formatted_address (or None if not found).
+    """
+    params = {
+        "query": search_query,
+        "key": api_key,
+    }
+    try:
+        resp = requests.get(GOOGLE_PLACES_ENDPOINT, params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        print(f"[Collector] Google Places request failed: {e!r}")
+        return [], None
+
+    results = data.get("results") or []
+    if not results:
+        return [], None
+
+    first = results[0]
+    found_address: str | None = first.get("formatted_address") or None
+
+    photos_meta = first.get("photos") or []
+    photo_urls: list[str] = []
+    for photo in photos_meta[:MAX_PHOTOS]:
+        ref = photo.get("photo_reference")
+        if not ref:
+            continue
+        url = (
+            f"{GOOGLE_PLACES_PHOTO_ENDPOINT}"
+            f"?maxwidth=800&photo_reference={ref}&key={api_key}"
+        )
+        photo_urls.append(url)
+
+    return photo_urls, found_address
+
+
+# =============================================================================
 # Fast LLM (matches the shape used by writer / critic / designer)
 # =============================================================================
 
@@ -203,10 +289,37 @@ def _passthrough(
 
 def collector_node(state: dict[str, Any]) -> dict[str, Any]:
     original_query = (state.get("research_notes") or "").strip()
+    target_region = state.get("target_region") or {}
+    region_label = target_region.get("label", "LA / OC")
 
-    # Photo lookup runs on every invocation regardless of SerpApi state, so a
-    # missing SERPAPI_API_KEY doesn't also cost us the carousel images.
+    # 1. Try local DB first (marketing_hotspots) — fast, free, no LLM needed.
     photo_urls = get_local_hotplace(original_query) if original_query else []
+    found_address: str | None = None
+
+    # 2. If local DB has no photos, run the Gatekeeper LLM to decide whether
+    #    this topic is a specific business worth hitting Google Places for.
+    if original_query and not photo_urls:
+        places_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+        if places_api_key:
+            search_query = _run_gatekeeper(original_query, region_label)
+            if search_query != "NONE":
+                print(
+                    f"[Collector] Gatekeeper → '{search_query}'; "
+                    f"calling Google Places API."
+                )
+                photo_urls, found_address = _fetch_google_places(
+                    search_query, places_api_key
+                )
+                if found_address:
+                    print(f"[Collector] Found address: {found_address}")
+            else:
+                print(
+                    "[Collector] Gatekeeper returned NONE — skipping Google Places."
+                )
+        else:
+            print(
+                "[Collector] GOOGLE_PLACES_API_KEY not set — skipping gatekeeper."
+            )
 
     if not original_query:
         return _passthrough(state, "no query in research_notes", photo_urls)
@@ -224,12 +337,11 @@ def collector_node(state: dict[str, Any]) -> dict[str, Any]:
     if not snippets:
         return _passthrough(state, "no snippets returned", photo_urls)
 
-    target_region = state.get("target_region") or {}
     snippets_block = "\n".join(snippets)
 
     system_prompt = COLLECTOR_SYSTEM_PROMPT.format(
         query=original_query,
-        target_region_label=target_region.get("label", "LA / OC"),
+        target_region_label=region_label,
         snippets_block=snippets_block,
     )
 
@@ -249,8 +361,11 @@ def collector_node(state: dict[str, Any]) -> dict[str, Any]:
     if not summary:
         return _passthrough(state, "empty summary from llm", photo_urls)
 
+    address_section = (
+        f"\n\n[발견된 장소 정보]\n📍 주소: {found_address}" if found_address else ""
+    )
     enriched = (
-        f"[원래 토픽]\n{original_query}\n\n[리서치 노트]\n{summary}"
+        f"[원래 토픽]\n{original_query}\n\n[리서치 노트]\n{summary}{address_section}"
     )
 
     return {
@@ -262,6 +377,7 @@ def collector_node(state: dict[str, Any]) -> dict[str, Any]:
                 "snippet_count": len(snippets),
                 "summary_chars": len(summary),
                 "photo_count": len(photo_urls),
+                "found_address": found_address,
             }
         ],
     }

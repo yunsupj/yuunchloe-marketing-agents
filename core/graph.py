@@ -59,7 +59,7 @@ class GraphState(TypedDict, total=False):
     app_context: AppContext
     target_region: TargetRegion
     pipeline_config: dict[str, Any]     # `pipeline.*` block from settings.yaml
-    hotspot_id: str                     # marketing_hotspots.id; threaded to publisher for Slack close-the-loop
+    hotspot_id: str | None              # marketing_hotspots.id; None for community-path posts
 
     # ---- Produced by upstream data-collection nodes ----
     research_notes: str                 # summarized local signals / trends

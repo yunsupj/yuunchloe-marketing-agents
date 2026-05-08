@@ -83,7 +83,12 @@ def _extract_topic(state: dict[str, Any]) -> str:
     notes = (state.get("research_notes") or "").strip()
     if "[원래 토픽]" in notes:
         body = notes.split("[원래 토픽]", 1)[1].lstrip()
-        topic = body.split("[리서치 노트]", 1)[0].strip()
+        # Strip everything from the first section marker onward so that
+        # [발견된 장소 정보], [주소], [리서치 노트] blocks don't bleed into
+        # the Slack topic string.
+        for marker in ("[발견된 장소 정보]", "[주소]", "[리서치 노트]"):
+            body = body.split(marker, 1)[0]
+        topic = body.strip()
         if topic:
             return topic
     if notes:

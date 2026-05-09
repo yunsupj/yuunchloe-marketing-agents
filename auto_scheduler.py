@@ -102,7 +102,15 @@ def get_hot_community_topic() -> str | None:
         return None
 
     row = rows[0]
-    title = (row.get("title") or "").strip()
+    title_raw = (row.get("title") or "").strip()
+    title = title_raw
+    if title_raw.startswith("{"):
+        try:
+            title_dict = json.loads(title_raw)
+            title = title_dict.get("ko") or title_dict.get("en") or title_raw
+        except Exception:
+            pass
+    title = title.strip()
     category = (row.get("category") or "").strip()
     if not title:
         print(f"[auto] Top row missing title: {row}")

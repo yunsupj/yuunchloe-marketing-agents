@@ -217,36 +217,50 @@ def extract_deals_from_image(
 
 
 # =============================================================================
-# 4. 핫딜 JSON → B급 병맛 광고 대본 (voiceover + 3 scenes + strategy)
+# 4. 핫딜 JSON → B급 병맛 광고 대본 (2-Stage 무적 파이프라인)
 # =============================================================================
 
-# 병맛 마케터 페르소나 — 마트 광고 대본 system instruction.
-MART_SYSTEM_PROMPT = (
+# [Stage 1] 오직 미친 크리에이티브와 텐션에만 집중하는 페르소나
+MART_CREATIVE_PROMPT = (
     "너는 미국 한인타운의 '광기 어린 틱톡 병맛 마케터'야. 마트 전단지 데이터를 "
-    "받아서 15초짜리 미친 텐션의 광고 대본을 만들어.\n\n"
+    "받아서 15초짜리 미친 텐션의 광고 대본과 3개의 씬 연출안을 만들어.\n\n"
     "🚨 [톤앤매너]\n"
     "1. 아주 다급한 '긴급 속보'나 '라이브 방송' 느낌으로 시작해 "
     "(예: '아니 사장님 지금 제정신입니까?!', '미국 마트에서 난동 발생!').\n"
     "2. 가격/세일 정보는 진지하게 말하지 마. '이 가격 실화냐?', '지갑 털리는 건 "
     "시간문제', '지금 당장 차 키 챙겨', '사장님 미쳤습니까?' 같은 멘트를 섞어.\n"
     "3. 초성(ㅋㅋ, ㄷㄷ, ㅠㅠ)은 절대 금지. 모든 감탄사는 자연스러운 구어체"
-    "('진짜 대박', '소름', '미쳤다')로 풀어써. ElevenLabs 성우가 어색하게 읽지 "
-    "않도록 물결표(~) 없이 깔끔한 문장으로 맺어.\n\n"
-    "🚨 [시각 연출]\n"
-    "1. 캡컷에서 '병맛 밈'으로 편집할 수 있도록 씬을 구체적으로 묘사해 "
-    "(예: 1초에 삼겹살이 운석처럼 떨어짐, 5초에 가격표가 폭발, 10초에 파에서 레이저).\n"
-    "2. 영상 생성 AI(Replicate)용 씬별 이미지 프롬프트를 정확히 3개 만들어.\n"
-    "3. 각 씬마다 캡컷 편집용 효과(effect)를 추천해."
+    "('진짜 대박', '소름', '미쳤다')로 풀어써. 물결표(~) 없이 깔끔한 문장으로 맺어.\n\n"
+    "🚨 [출력 형식]\n"
+    "반드시 아래 평문 텍스트 양식을 칼같이 지켜서 응답해. JSON 형식은 절대 사용하지 마.\n\n"
+    "=== 대본 ===\n"
+    "[성우가 읽을 15초 분량의 자유로운 대본 내용]\n\n"
+    "=== 씬 정보 ===\n"
+    "1컷(0-5s): [Replicate 이미지 프롬프트] | [캡컷 효과 추천]\n"
+    "2컷(5-10s): [Replicate 이미지 프롬프트] | [캡컷 효과 추천]\n"
+    "3컷(10-15s): [Replicate 이미지 프롬프트] | [캡컷 효과 추천]\n\n"
+    "=== 마케팅 전략 ===\n"
+    "[어떤 포인트에서 병맛을 유도했는지 1줄 요약]"
 )
 
+# [Stage 2] 감정을 배제하고 오직 규격 데이터 매핑만 수행하는 정밀 포맷터
+STRUCTURE_SYSTEM_PROMPT = (
+    "너는 텍스트 파싱 및 JSON 구조화 전문가야. 공급된 원본 텍스트를 분석하여 "
+    "지정된 JSON 스키마 규격으로 완벽하게 변환해. 텍스트 내에 존재하는 큰따옴표(\")나 "
+    "특수문자가 JSON 문법을 깨트리지 않도록 문자열 내부를 철저히 정제하고 이스케이프해."
+)
 
-def _build_mart_prompt(deals_json: dict, day_context: str = "") -> str:
-    """핫딜 JSON 을 넣어 병맛 광고 JSON 을 요청하는 프롬프트. day_context 로 요일 톤 주입."""
+def _build_mart_creative_prompt(deals_json: dict, day_context: str = "") -> str:
+    """Stage 1용 원본 데이터 주입 프롬프트"""
     data_str = json.dumps(deals_json, ensure_ascii=False, indent=2)
     context_block = (
-        f"[오늘의 컨텍스트]\n{day_context}\n이 컨텍스트도 광고에 녹여줘.\n\n"
+        f"[오늘의 컨텍스트]\n{day_context}\n이 컨텍스트도 광고에 강력하게 녹여줘.\n\n"
         if day_context else ""
     )
+    return f"{context_block}[마트 세일 JSON 데이터]\n{data_str}\n\n위 데이터를 기반으로 양식에 맞춰 미친 텐션의 광고를 작성해줘."
+
+def _build_structure_prompt(raw_creative_text: str) -> str:
+    """Stage 2용 JSON 스키마 강제 프롬프트"""
     schema = (
         '{\n'
         '  "voiceover_script": "<성우가 읽을 15초 구어체 대본>",\n'
@@ -259,13 +273,10 @@ def _build_mart_prompt(deals_json: dict, day_context: str = "") -> str:
         '}'
     )
     return (
-        f"{context_block}"
-        f"[마트 세일 JSON 데이터]\n{data_str}\n\n"
-        "위 데이터로 미친 텐션의 광고를 만들어. 반드시 아래 JSON 형식으로만 응답해. "
-        "마크다운(```json 등)이나 다른 텍스트는 절대 붙이지 마.\n\n"
+        f"[분석할 원본 텍스트]\n{raw_creative_text}\n\n"
+        f"위 텍스트에서 정보를 추출하여 반드시 아래 JSON 형식으로만 응답해. 오직 JSON만 출력할 것.\n\n"
         f"{schema}"
     )
-
 
 def craft_mart_script(
     deals_json: dict,
@@ -273,33 +284,40 @@ def craft_mart_script(
     day_context: str = "",
 ) -> dict | None:
     """
-    핫딜 JSON 을 Gemini 에 전달해 병맛 광고 JSON
-    {voiceover_script, scenes[3], marketing_strategy} 을 생성. 실패 시 None.
-    image_bytes 가 있으면 전단지를 Evidence Source 로 첨부한다.
+    2단계 분리 파이프라인을 실행하여 안전하게 구조화된 병맛 광고 객체를 반환합니다.
     """
-    contents: list = [_build_mart_prompt(deals_json, day_context)]
+    # Step 1: Creative Generation (텍스트 모드로 자유로운 감정 분출)
+    creative_contents: list = [_build_mart_creative_prompt(deals_json, day_context)]
     if image_bytes:
         img = image_part(image_bytes, "image/jpeg")
         if img is not None:
-            contents.append(img)
+            creative_contents.append(img)
 
-    raw = call_gemini(
-        contents,
-        system_instruction=MART_SYSTEM_PROMPT,
-        temperature=0.70,
+    raw_creative = call_gemini(
+        creative_contents,
+        system_instruction=MART_CREATIVE_PROMPT,
+        temperature=0.95,
+        max_output_tokens=2048,
+    )
+    if not raw_creative:
+        print("[에러] 1단계 크리에이티브 대본 생성 실패.")
+        return None
+
+    # Step 2: Rigid Structuring (정밀 모드로 완전한 JSON 규격화)
+    structure_prompt = _build_structure_prompt(raw_creative)
+
+    raw_json = call_gemini(
+        [structure_prompt],
+        system_instruction=STRUCTURE_SYSTEM_PROMPT,
+        temperature=0.1,
         max_output_tokens=2048,
         response_mime_type="application/json",
     )
-    if not raw:
+    if not raw_json:
+        print("[에러] 2단계 JSON 구조화 맵핑 실패.")
         return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        print("[디버그] JSON 파싱 실패! 문자열 정리 시도...")
-        # 앞뒤 불필요한 마크다운 코드블록 제거
-        clean_raw = re.sub(r"^```json\s*", "", raw.strip())
-        clean_raw = re.sub(r"\s*```$", "", clean_raw)
-        return json.loads(clean_raw)
+
+    return parse_json_safely(raw_json)
 
 
 # =============================================================================
@@ -506,15 +524,19 @@ def build_asset_package(
         img_path = os.path.join(out_dir, f"{i:02d}_scene.png")
         clip_path = os.path.join(out_dir, f"{i:02d}_scene.mp4")
 
-        print(f"[Assets] ({i}/{clip_budget}) 씬 이미지 생성...")
-        made_img = generate_image_asset(visual, img_path)
-        if made_img:
-            asset_files.append(os.path.basename(img_path))
+       # ==========================================
+        # 🚨 여기서부터 주석 처리 (이미지/영상 자동생성 차단)
+        # ==========================================
+        # print(f"[Assets] ({i}/{clip_budget}) 씬 이미지 생성...")
+        # made_img = generate_image_asset(visual, img_path)
+        # if made_img:
+        #     asset_files.append(os.path.basename(img_path))
 
-        print(f"[Assets] ({i}/{clip_budget}) 씬 영상 클립 생성...")
-        made_clip = generate_video_clip(visual, clip_path, init_image_path=made_img)
-        if made_clip:
-            asset_files.append(os.path.basename(clip_path))
+        # print(f"[Assets] ({i}/{clip_budget}) 씬 영상 클립 생성...")
+        # made_clip = generate_video_clip(visual, clip_path, init_image_path=made_img)
+        # if made_clip:
+        #     asset_files.append(os.path.basename(clip_path))
+        # ==========================================
 
     # 2) prompts.json — 씬(time/visual_prompt/effect) + 전략 + 모델
     prompts_path = os.path.join(out_dir, "prompts.json")

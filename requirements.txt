@@ -10,3 +10,5 @@ supabase
 fastapi
 python-multipart
 uvicorn
+beautifulsoup4
+google-generativeai

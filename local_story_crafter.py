@@ -87,6 +87,7 @@ def fetch_unprocessed_story() -> dict | None:
             client.table("posts")
             .select("id, title, content, region, likes, views")
             .eq("is_expired", True)
+            .neq("category", "핫딜/쇼핑")
             .order("likes", desc=True)
             .limit(FETCH_LIMIT)
             .execute()

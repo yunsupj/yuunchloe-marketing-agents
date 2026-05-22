@@ -29,10 +29,7 @@ from utils.assets import (  # noqa: E402
     download_to,
     generate_voiceover,
 )
-from utils.brand import (  # noqa: E402
-    BRAND_IDENTITY_SYSTEM_PROMPT,
-    day_of_week_context,
-)
+from utils.brand import day_of_week_context  # noqa: E402
 
 MARKET_URL = "https://www.radiokorea.com/market/"
 
@@ -220,59 +217,82 @@ def extract_deals_from_image(
 
 
 # =============================================================================
-# 4. 핫딜 JSON → InVideo AI 입력용 틱톡 대본
+# 4. 핫딜 JSON → B급 병맛 광고 대본 (voiceover + 3 scenes + strategy)
 # =============================================================================
 
+# 병맛 마케터 페르소나 — 마트 광고 대본 system instruction.
+MART_SYSTEM_PROMPT = (
+    "너는 미국 한인타운의 '광기 어린 틱톡 병맛 마케터'야. 마트 전단지 데이터를 "
+    "받아서 15초짜리 미친 텐션의 광고 대본을 만들어.\n\n"
+    "🚨 [톤앤매너]\n"
+    "1. 아주 다급한 '긴급 속보'나 '라이브 방송' 느낌으로 시작해 "
+    "(예: '아니 사장님 지금 제정신입니까?!', '미국 마트에서 난동 발생!').\n"
+    "2. 가격/세일 정보는 진지하게 말하지 마. '이 가격 실화냐?', '지갑 털리는 건 "
+    "시간문제', '지금 당장 차 키 챙겨', '사장님 미쳤습니까?' 같은 멘트를 섞어.\n"
+    "3. 초성(ㅋㅋ, ㄷㄷ, ㅠㅠ)은 절대 금지. 모든 감탄사는 자연스러운 구어체"
+    "('진짜 대박', '소름', '미쳤다')로 풀어써. ElevenLabs 성우가 어색하게 읽지 "
+    "않도록 물결표(~) 없이 깔끔한 문장으로 맺어.\n\n"
+    "🚨 [시각 연출]\n"
+    "1. 캡컷에서 '병맛 밈'으로 편집할 수 있도록 씬을 구체적으로 묘사해 "
+    "(예: 1초에 삼겹살이 운석처럼 떨어짐, 5초에 가격표가 폭발, 10초에 파에서 레이저).\n"
+    "2. 영상 생성 AI(Replicate)용 씬별 이미지 프롬프트를 정확히 3개 만들어.\n"
+    "3. 각 씬마다 캡컷 편집용 효과(effect)를 추천해."
+)
 
-def _build_script_prompt(deals_json: dict, day_context: str = "") -> str:
-    """핫딜 JSON 을 넣어 틱톡 대본을 요청하는 프롬프트. day_context 로 요일 톤 주입."""
+
+def _build_mart_prompt(deals_json: dict, day_context: str = "") -> str:
+    """핫딜 JSON 을 넣어 병맛 광고 JSON 을 요청하는 프롬프트. day_context 로 요일 톤 주입."""
     data_str = json.dumps(deals_json, ensure_ascii=False, indent=2)
     context_block = (
-        f"[오늘의 컨텍스트]\n{day_context}\n이 컨텍스트에 맞는 톤과 소구점으로 "
-        "대본을 작성해.\n\n" if day_context else ""
+        f"[오늘의 컨텍스트]\n{day_context}\n이 컨텍스트도 광고에 녹여줘.\n\n"
+        if day_context else ""
+    )
+    schema = (
+        '{\n'
+        '  "voiceover_script": "<성우가 읽을 15초 구어체 대본>",\n'
+        '  "scenes": [\n'
+        '    {"time": "0-5s", "visual_prompt": "<Replicate 이미지 프롬프트 1>", "effect": "<캡컷 효과 추천>"},\n'
+        '    {"time": "5-10s", "visual_prompt": "<Replicate 이미지 프롬프트 2>", "effect": "<캡컷 효과 추천>"},\n'
+        '    {"time": "10-15s", "visual_prompt": "<Replicate 이미지 프롬프트 3>", "effect": "<캡컷 효과 추천>"}\n'
+        '  ],\n'
+        '  "marketing_strategy": "<어떤 포인트에서 병맛을 유도했는지 1줄 요약>"\n'
+        '}'
     )
     return (
-        "너는 틱톡 숏폼 대본 작가야. 제공된 마트 세일 JSON 데이터를 바탕으로 "
-        "15초 분량의 빠르고 경쾌한 정보성 틱톡 대본을 작성해.\n\n"
         f"{context_block}"
-        "영상 지시문(B-roll 시각 자료)과 나레이션(Voiceover)을 구분해서 적어줘.\n\n"
-        "마지막 클로징(CTA) 나레이션에는 반드시 '애플 앱스토어와 구글 플레이에서 "
-        "깨알톡을 검색하세요'라는 멘트가 자연스럽게 들어가야 해.\n\n"
-        "대본은 TTS 엔진이 읽기 편한 구어체로 작성할 것. 가격은 '9달러 99센트'처럼 "
-        "읽기 쉽게 풀어쓰고($9.99 → 9달러 99센트), 복잡한 특수문자(#, *, /, ~, $ 등)는 "
-        "나레이션에서 제거해.\n\n"
-        f"[마트 세일 JSON 데이터]\n{data_str}"
+        f"[마트 세일 JSON 데이터]\n{data_str}\n\n"
+        "위 데이터로 미친 텐션의 광고를 만들어. 반드시 아래 JSON 형식으로만 응답해. "
+        "마크다운(```json 등)이나 다른 텍스트는 절대 붙이지 마.\n\n"
+        f"{schema}"
     )
 
 
-def generate_video_script(
+def craft_mart_script(
     deals_json: dict,
     image_bytes: bytes | None = None,
     day_context: str = "",
-) -> str | None:
+) -> dict | None:
     """
-    핫딜 JSON 을 Gemini 에 전달해 틱톡 대본(B-roll 지시문 + Voiceover)을 생성.
-    실패 시 None.
-
-    - Brand Identity 가이드를 system_instruction 으로 무조건 주입한다.
-    - image_bytes 가 주어지면 전단지를 Evidence Source 로 첨부한다.
+    핫딜 JSON 을 Gemini 에 전달해 병맛 광고 JSON
+    {voiceover_script, scenes[3], marketing_strategy} 을 생성. 실패 시 None.
+    image_bytes 가 있으면 전단지를 Evidence Source 로 첨부한다.
     """
-    contents: list = [_build_script_prompt(deals_json, day_context)]
+    contents: list = [_build_mart_prompt(deals_json, day_context)]
     if image_bytes:
         img = image_part(image_bytes, "image/jpeg")
         if img is not None:
             contents.append(img)
 
-    script = call_gemini(
+    raw = call_gemini(
         contents,
-        system_instruction=BRAND_IDENTITY_SYSTEM_PROMPT,
-        temperature=0.8,
-        max_output_tokens=4096,
+        system_instruction=MART_SYSTEM_PROMPT,
+        temperature=0.95,
+        max_output_tokens=2048,
+        response_mime_type="application/json",
     )
-    if not script:
-        print("[경고] 대본 생성 실패 또는 빈 응답.")
+    if not raw:
         return None
-    return script
+    return parse_json_safely(raw)
 
 
 # =============================================================================
@@ -296,6 +316,15 @@ def _fallback_script(market_name: str) -> str:
         f"오늘 {market_name} 세일 정보, 깨알톡 앱에서 지금 바로 확인해보세요! "
         "놓치면 후회할 득템 기회, 지금 앱을 켜세요!"
     )
+
+
+def _fallback_crafted(market_name: str) -> dict:
+    """분석 실패 시 쓰는 범용 광고 dict. scenes 가 없어 영상 생성은 건너뛴다."""
+    return {
+        "voiceover_script": _fallback_script(market_name),
+        "scenes": [],
+        "marketing_strategy": "fallback — 데이터 부족으로 범용 멘트 사용",
+    }
 
 
 def save_evidence_image(image_bytes: bytes, market_name: str) -> str:
@@ -342,12 +371,6 @@ def build_render_request(
 # =============================================================================
 # 6. 편집 재료 자동화 (Replicate 이미지/영상 + ElevenLabs 보이스)
 # =============================================================================
-
-
-def _item_slug(name: str, idx: int) -> str:
-    """핫딜 상품명을 ASCII 슬러그로. 한글 등 비ASCII면 deal{idx} 로 폴백."""
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name or "").strip("_").lower()
-    return slug or f"deal{idx}"
 
 
 def _save_replicate_output(output, out_path: str) -> bool:
@@ -440,80 +463,61 @@ def generate_video_clip(
     return out_path if _save_replicate_output(output, out_path) else None
 
 
-def extract_narration(script: str) -> str:
-    """대본에서 순수 나레이션(Voiceover)만 추출 — TTS 입력용. 실패 시 원본 반환."""
-    text = call_gemini(
-        [
-            "다음 틱톡 대본에서 성우가 실제로 읽을 '나레이션(Voiceover)' 문장만 "
-            "순서대로 이어 붙여서 출력해. B-roll 영상 지시문, 장면 번호, 대괄호 "
-            "표시는 모두 제거하고 순수하게 말할 텍스트만 한 덩어리로 줘.\n\n"
-            f"[대본]\n{script}"
-        ],
-        temperature=0.2,
-        max_output_tokens=2048,
-    )
-    return text or script
-
-
 def build_asset_package(
     market: str,
     deals: dict,
-    script: str,
+    crafted: dict,
     evidence_path: str,
     day_context: str = "",
 ) -> str:
     """
     assets/YYYYMMDD/ 아래에 CapCut 수동 조립용 재료 패키지를 생성한다:
-        01_<item>.png/.mp4   — Replicate 이미지/영상
-        prompts.json         — 씬별 Replicate 프롬프트 (재생성용)
-        voiceover_script.txt — ElevenLabs 에 던질 순수 한글 나레이션
+        01_scene.png/.mp4 …  — 씬별 visual_prompt 로 만든 Replicate 이미지/영상
+        prompts.json         — 씬(time/visual_prompt/effect) + 전략 + 모델
+        voiceover_script.txt — 성우용 구어체 대본
         captions.srt         — CapCut 드래그용 자막 (가상 타임코드)
-        voiceover.mp3        — ElevenLabs 보이스
+        voiceover.mp3        — ElevenLabs 보이스 (텐션 보이스)
         flyer_data.json      — 통합 메타 + 에셋 매니페스트
     각 외부 API 키/패키지가 없으면 해당 에셋만 건너뛰고 계속 진행한다.
     """
     out_dir = assets_dir_today()
     print(f"[Assets] 편집 재료 폴더: {out_dir}")
     asset_files: list[str] = []
-    scene_prompts: list[dict] = []
 
-    # 1) 핫딜별 이미지 → 영상 클립 (상위 MAX_CLIPS 개)
-    top_deals = (deals.get("top_deals") or [])[:MAX_CLIPS]
-    for i, deal in enumerate(top_deals, start=1):
-        item = (deal.get("item") or "").strip()
-        price = (deal.get("price") or "").strip()
-        slug = _item_slug(item, i)
-        scene_prompt = (
-            f"Photorealistic 9:16 short-form video scene for a Korean grocery deal: "
-            f"{item} ({price}). Bright, appetizing, real product photography style. "
-            f"No text overlays."
-        )
-        scene_prompts.append(
-            {"scene": i, "item": item, "price": price, "prompt": scene_prompt}
-        )
-        img_path = os.path.join(out_dir, f"{i:02d}_{slug}.png")
-        clip_path = os.path.join(out_dir, f"{i:02d}_{slug}.mp4")
+    voiceover_script = (crafted.get("voiceover_script") or "").strip()
+    scenes = crafted.get("scenes") or []
+    strategy = (crafted.get("marketing_strategy") or "").strip()
 
-        print(f"[Assets] ({i}/{len(top_deals)}) '{item}' 이미지 생성...")
-        made_img = generate_image_asset(scene_prompt, img_path)
+    # 1) 씬별 이미지 → 영상 클립 (비용 제어: 상위 MAX_CLIPS 씬만 생성)
+    clip_budget = min(len(scenes), MAX_CLIPS)
+    for i, scene in enumerate(scenes, start=1):
+        if i > MAX_CLIPS:
+            break
+        visual = (scene.get("visual_prompt") or "").strip() if isinstance(scene, dict) else ""
+        if not visual:
+            continue
+        img_path = os.path.join(out_dir, f"{i:02d}_scene.png")
+        clip_path = os.path.join(out_dir, f"{i:02d}_scene.mp4")
+
+        print(f"[Assets] ({i}/{clip_budget}) 씬 이미지 생성...")
+        made_img = generate_image_asset(visual, img_path)
         if made_img:
             asset_files.append(os.path.basename(img_path))
 
-        print(f"[Assets] ({i}/{len(top_deals)}) '{item}' 영상 클립 생성...")
-        made_clip = generate_video_clip(
-            scene_prompt, clip_path, init_image_path=made_img
-        )
+        print(f"[Assets] ({i}/{clip_budget}) 씬 영상 클립 생성...")
+        made_clip = generate_video_clip(visual, clip_path, init_image_path=made_img)
         if made_clip:
             asset_files.append(os.path.basename(clip_path))
 
-    # 2) prompts.json — 씬별 Replicate 프롬프트 (재생성용)
+    # 2) prompts.json — 씬(time/visual_prompt/effect) + 전략 + 모델
     prompts_path = os.path.join(out_dir, "prompts.json")
     with open(prompts_path, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "image_model": REPLICATE_IMAGE_MODEL,
                 "video_model": REPLICATE_VIDEO_MODEL,
-                "scenes": scene_prompts,
+                "marketing_strategy": strategy,
+                "scenes": scenes,
             },
             f,
             ensure_ascii=False,
@@ -521,29 +525,27 @@ def build_asset_package(
         )
     asset_files.append("prompts.json")
 
-    # 3) 나레이션 → voiceover_script.txt + captions.srt + voiceover.mp3
-    print("[Assets] 나레이션 추출...")
-    narration = extract_narration(script)
-
+    # 3) voiceover_script.txt + captions.srt + voiceover.mp3
     vo_txt_path = os.path.join(out_dir, "voiceover_script.txt")
     with open(vo_txt_path, "w", encoding="utf-8") as f:
-        f.write(narration)
+        f.write(voiceover_script)
     asset_files.append("voiceover_script.txt")
 
     srt_path = os.path.join(out_dir, "captions.srt")
     with open(srt_path, "w", encoding="utf-8") as f:
-        f.write(build_srt(narration))
+        f.write(build_srt(voiceover_script))
     asset_files.append("captions.srt")
 
     print("[Assets] 보이스 생성...")
     vo_path = os.path.join(out_dir, "voiceover.mp3")
-    if generate_voiceover(narration, vo_path, ELEVENLABS_MART_VOICE_ID):
+    if generate_voiceover(voiceover_script, vo_path, ELEVENLABS_MART_VOICE_ID):
         asset_files.append("voiceover.mp3")
 
     # 4) 통합 메타 + 에셋 매니페스트 (flyer_data.json)
-    flyer_data = build_render_request(market, deals, script, evidence_path)
+    flyer_data = build_render_request(market, deals, voiceover_script, evidence_path)
     flyer_data["day_context"] = day_context
-    flyer_data["narration"] = narration
+    flyer_data["marketing_strategy"] = strategy
+    flyer_data["scenes"] = scenes
     flyer_data["asset_files"] = asset_files
     data_path = os.path.join(out_dir, "flyer_data.json")
     with open(data_path, "w", encoding="utf-8") as f:
@@ -593,28 +595,30 @@ if __name__ == "__main__":
         print("\n=== 추출 결과 (JSON) ===")
         print(json.dumps(deals, ensure_ascii=False, indent=2))
 
-        print("\n[4/5] Brand Identity 적용 + 틱톡 대본 생성 중...")
-        script = None
+        print("\n[4/5] 병맛 광고 대본 생성 중...")
+        crafted = None
         try:
-            script = generate_video_script(
+            crafted = craft_mart_script(
                 deals, image_bytes=image_bytes, day_context=day_context
             )
         except Exception as e:
             print(f"[경고] 대본 생성 중 예외 발생: {e!r}")
-        if not script:
+        if not crafted or not (crafted.get("voiceover_script") or "").strip():
             print("[Fallback] 대본 생성 실패 → 범용 대본으로 우회.")
-            script = _fallback_script(market)
+            crafted = _fallback_crafted(market)
     else:
         print("[Fallback] 가격 데이터 없음/이미지 분석 실패 → 범용 대본으로 우회.")
         deals = {"market_name": market, "top_deals": []}
-        script = _fallback_script(market)
+        crafted = _fallback_crafted(market)
 
-    print("\n=== 틱톡 대본 (Brand Identity 적용) ===")
-    print(script)
+    print("\n=== 병맛 광고 대본 ===")
+    print(crafted.get("voiceover_script", ""))
+    if crafted.get("marketing_strategy"):
+        print(f"\n[전략] {crafted['marketing_strategy']}")
 
     # 편집 재료 자동화 모드: assets/YYYYMMDD/ 에 편집용 재료 패키지 생성
     print("\n[5/5] 편집 재료 생성 (Replicate 이미지·영상 + ElevenLabs 보이스)...")
-    out_dir = build_asset_package(market, deals, script, evidence_path, day_context)
+    out_dir = build_asset_package(market, deals, crafted, evidence_path, day_context)
     print(f"\n[완료] 편집 재료 패키지: {out_dir}/")
-    print("        → 01_*.mp4 / voiceover.mp3 / captions.srt 를 CapCut 에 드래그,")
-    print("          prompts.json·voiceover_script.txt 로 재생성/재녹음 가능.")
+    print("        → 01_scene.mp4 / voiceover.mp3 / captions.srt 를 CapCut 에 드래그,")
+    print("          prompts.json 의 scenes(effect 포함)·voiceover_script.txt 활용.")

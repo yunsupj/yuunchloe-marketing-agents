@@ -146,18 +146,29 @@ def _build_story_prompt(title: str, content: str, region: str) -> str:
     )
 
 
-def craft_story_script(title: str, content: str, region: str) -> dict | None:
-    """Gemini 호출 → {replicate_prompt, voiceover_script} dict 또는 None."""
-    raw = call_gemini(
-        [_build_story_prompt(title, content, region)],
-        system_instruction=STORY_SYSTEM_PROMPT,
-        temperature=0.8,
-        max_output_tokens=2048,
-        response_mime_type="application/json",
-    )
-    if not raw:
-        return None
-    return parse_json_safely(raw)
+def craft_story_script(title: str, content: str, region: str, max_retries: int = 3) -> dict | None:
+    """Gemini 호출 → {replicate_prompt, voiceover_script} (자동 재시도 포함)"""
+    for attempt in range(1, max_retries + 1):
+        raw = call_gemini(
+            [_build_story_prompt(title, content, region)],
+            system_instruction=STORY_SYSTEM_PROMPT,
+            temperature=0.8,
+            max_output_tokens=2048,
+            # response_mime_type="application/json",  # 주석 처리 유지
+        )
+
+        if not raw:
+            print(f"[Gemini] 응답이 비어 있습니다. (시도 {attempt}/{max_retries})")
+            continue
+
+        parsed = parse_json_safely(raw)
+        if parsed:
+            return parsed
+
+        print(f"[Gemini] JSON 파싱 실패. (시도 {attempt}/{max_retries}) 다시 요청합니다...")
+
+    print("[중단] 최대 재시도 횟수를 초과했습니다.")
+    return None
 
 
 # =============================================================================

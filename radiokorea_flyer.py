@@ -286,13 +286,20 @@ def craft_mart_script(
     raw = call_gemini(
         contents,
         system_instruction=MART_SYSTEM_PROMPT,
-        temperature=0.95,
+        temperature=0.70,
         max_output_tokens=2048,
         response_mime_type="application/json",
     )
     if not raw:
         return None
-    return parse_json_safely(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        print("[디버그] JSON 파싱 실패! 문자열 정리 시도...")
+        # 앞뒤 불필요한 마크다운 코드블록 제거
+        clean_raw = re.sub(r"^```json\s*", "", raw.strip())
+        clean_raw = re.sub(r"\s*```$", "", clean_raw)
+        return json.loads(clean_raw)
 
 
 # =============================================================================

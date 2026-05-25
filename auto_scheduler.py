@@ -40,7 +40,7 @@ from core.graph import graph  # noqa: E402
 
 HOT_LOOKBACK_HOURS = 48
 HOTDEAL_CATEGORY = "핫딜/쇼핑"   # 도배를 막을 대상 카테고리
-HOTDEAL_PROBABILITY = 0.10      # 비-금요일에 핫딜이 노출될 최대 확률 (10%)
+HOTDEAL_PROBABILITY = 0.00      # 비-금요일에 핫딜이 노출될 최대 확률 (10%)
 HOT_FETCH_LIMIT = 25            # 카테고리 분류용으로 상위 N개를 받아온다
 
 

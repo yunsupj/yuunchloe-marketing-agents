@@ -39,6 +39,9 @@ from core.graph import graph  # noqa: E402
 
 
 HOT_LOOKBACK_HOURS = 48
+HOTDEAL_CATEGORY = "핫딜/쇼핑"   # 도배를 막을 대상 카테고리
+HOTDEAL_PROBABILITY = 0.10      # 비-금요일에 핫딜이 노출될 최대 확률 (10%)
+HOT_FETCH_LIMIT = 25            # 카테고리 분류용으로 상위 N개를 받아온다
 
 
 def _build_supabase_client():
@@ -70,10 +73,29 @@ def _build_supabase_client():
         return None
 
 
+def _extract_title(row: dict) -> str:
+    """posts.title 이 JSON 문자열({"ko":...}) 일 수 있으므로 안전하게 제목을 추출한다."""
+    title_raw = (row.get("title") or "").strip()
+    title = title_raw
+    if title_raw.startswith("{"):
+        try:
+            title_dict = json.loads(title_raw)
+            title = title_dict.get("ko") or title_dict.get("en") or title_raw
+        except Exception:
+            pass
+    return title.strip()
+
+
 def get_hot_community_topic() -> str | None:
     """
-    Returns the hottest recent post as 'TITLE (카테고리: CATEGORY)', or None
-    if Supabase is unreachable / empty.
+    최근 인기글 1개를 'TITLE (카테고리: CATEGORY)' 형태로 반환. 없으면 None.
+
+    카테고리 비중 조절 (핫딜 도배 방지):
+      1. 기본적으로 '핫딜/쇼핑'을 제외한 일반 카테고리(자유수다·동네맛집·
+         정보/소식 등)를 최우선으로 뽑는다.
+      2. '핫딜/쇼핑'은 금요일(weekday==4)이거나 10% 확률에 당첨됐을 때만
+         노출 슬롯을 얻는다.
+      3. 일반 카테고리 글이 하나도 없을 때만 핫딜글로 폴백한다.
     """
     client = _build_supabase_client()
     if client is None:
@@ -89,31 +111,48 @@ def get_hot_community_topic() -> str | None:
             .select("title, category, views, likes, created_at")
             .gte("created_at", since)
             .order("views", desc=True)
-            .limit(1)
+            .limit(HOT_FETCH_LIMIT)
             .execute()
         )
     except Exception as e:
         print(f"[auto] Supabase query failed: {e!r}")
         return None
 
-    rows = getattr(resp, "data", None) or []
+    rows = [r for r in (getattr(resp, "data", None) or []) if isinstance(r, dict)]
     if not rows:
         print("[auto] Supabase returned no recent posts.")
         return None
 
-    row = rows[0]
-    title_raw = (row.get("title") or "").strip()
-    title = title_raw
-    if title_raw.startswith("{"):
-        try:
-            title_dict = json.loads(title_raw)
-            title = title_dict.get("ko") or title_dict.get("en") or title_raw
-        except Exception:
-            pass
-    title = title.strip()
-    category = (row.get("category") or "").strip()
+    # 핫딜 vs 일반 카테고리로 분리 (둘 다 이미 views 내림차순 유지)
+    general_rows = [
+        r for r in rows if (r.get("category") or "").strip() != HOTDEAL_CATEGORY
+    ]
+    hotdeal_rows = [
+        r for r in rows if (r.get("category") or "").strip() == HOTDEAL_CATEGORY
+    ]
+
+    # 핫딜 노출 허용 여부: 금요일 또는 10% 확률
+    hotdeal_allowed = (
+        datetime.today().weekday() == 4 or random.random() < HOTDEAL_PROBABILITY
+    )
+
+    if hotdeal_allowed and hotdeal_rows:
+        chosen = hotdeal_rows[0]
+        print("[auto] 핫딜 노출 슬롯(금요일/확률 당첨) — '핫딜/쇼핑' 글 선택.")
+    elif general_rows:
+        chosen = general_rows[0]
+        print("[auto] 일반 카테고리 글 선택 (핫딜 제외 최우선).")
+    elif hotdeal_rows:
+        chosen = hotdeal_rows[0]
+        print("[auto] 일반 카테고리 글이 없어 핫딜글로 폴백.")
+    else:
+        print("[auto] 사용할 만한 게시글이 없음.")
+        return None
+
+    title = _extract_title(chosen)
+    category = (chosen.get("category") or "").strip()
     if not title:
-        print(f"[auto] Top row missing title: {row}")
+        print(f"[auto] Top row missing title: {chosen}")
         return None
 
     return f"{title} (카테고리: {category})" if category else title

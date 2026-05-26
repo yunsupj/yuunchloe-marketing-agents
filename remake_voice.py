@@ -33,7 +33,8 @@ def main():
         return
 
     # 4. 공감/썰 보이스 ID 가져와서 덮어쓰기 (마트용으로 쓰려면 MART_VOICE_ID로 변경)
-    voice_id = os.getenv("ELEVENLABS_STORY_VOICE_ID")
+    # voice_id = os.getenv("ELEVENLABS_STORY_VOICE_ID")
+    voice_id = os.getenv("ELEVENLABS_MART_VOICE_ID")
     print(f"🎙️ 다음 텍스트로 음성을 재추출합니다:\n{narration}\n")
     print("⏳ 생성 중...")
 

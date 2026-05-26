@@ -100,7 +100,11 @@ def fetch_tiktok_videos(keyword: str) -> list[dict]:
         print(f"[Viral] Apify Actor 실행 실패: {e!r}")
         return []
 
-    dataset_id = (run or {}).get("defaultDatasetId")
+    if isinstance(run, dict):
+        dataset_id = run.get("defaultDatasetId")
+    else:
+        dataset_id = getattr(run, "defaultDatasetId", getattr(run, "default_dataset_id", None))
+
     if not dataset_id:
         print("[Viral] Apify 실행 결과에 dataset 이 없음.")
         return []
@@ -161,7 +165,7 @@ def _build_viral_prompt(top_videos: list[dict]) -> str:
     schema = (
         '{\n'
         '  "replicate_prompt": "<영어 배경 영상 프롬프트>",\n'
-        '  "voiceover_script": "<15초 한글 나레이션>",\n'
+        '  "voiceover_script": "<15초 한글 나레이션, 반드시 공백 포함 130자 이내, 5문장 이하로만 극단적으로 압축할 것>",\n'
         '  "strategy_summary": "<어떤 바이럴 요소를 카피했는지 1줄 요약>"\n'
         '}'
     )

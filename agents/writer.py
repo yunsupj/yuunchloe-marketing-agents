@@ -115,13 +115,27 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
         prev_carousel = state.get("carousel_ko") or []
         prev_caption = state.get("caption_ko") or ""
 
+        # 이전 패스에서 caption_ko 가 비어 있었다면 빈 JSON 을 다시 주입하지 않고
+        # 강력한 강제 지시문으로 대체 — 누락의 자기강화 루프를 끊는다.
+        if prev_caption.strip():
+            previous_caption_block = json.dumps(
+                {"caption_ko": prev_caption}, ensure_ascii=False, indent=2
+            )
+        else:
+            previous_caption_block = (
+                "🚨 CRITICAL: You omitted 'caption_ko' in the previous pass. "
+                "You MUST generate 'caption_ko' this time. "
+                "Follow the 6-step caption structure exactly: intro / ⭐️picks / "
+                "💡tip / 📍address-or-skip / by.#깨알톡 / hashtags."
+            )
+
         prompt += WRITER_REVISION_SUFFIX.format(
             critic_score=critic_score,
             feedback_ko=feedback_ko if feedback_ko else "Pass",
             feedback_en=feedback_en if feedback_en else "Pass",
             feedback_reddit=feedback_reddit if feedback_reddit else "Pass",
             previous_ko_carousel_json=json.dumps(prev_carousel, ensure_ascii=False, indent=2),
-            previous_ko_caption_json=json.dumps({"caption_ko": prev_caption}, ensure_ascii=False, indent=2),
+            previous_ko_caption_json=previous_caption_block,
         )
 
     return prompt
@@ -311,12 +325,34 @@ def _coerce_payload(raw: str) -> dict[str, Any]:
     caption_en = data.get("caption_en")
     og_category_tag = data.get("og_category_tag")
 
+    # 침묵의 폴백 가시화 — 캡션 누락/비-문자열/빈 문자열 모두 명시 경고.
+    if not isinstance(caption_ko, str):
+        print(
+            f"[Writer] Warning: caption_ko missing or non-string in LLM output "
+            f"(type={type(caption_ko).__name__}) — coerced to empty string."
+        )
+        caption_ko_safe = ""
+    elif not caption_ko.strip():
+        print("[Writer] Warning: caption_ko is empty string in LLM output!")
+        caption_ko_safe = ""
+    else:
+        caption_ko_safe = caption_ko
+
+    if not isinstance(caption_en, str):
+        print(
+            f"[Writer] Warning: caption_en missing or non-string in LLM output "
+            f"(type={type(caption_en).__name__}) — coerced to empty string."
+        )
+        caption_en_safe = ""
+    else:
+        caption_en_safe = caption_en
+
     return {
         "carousel_ko": carousel_ko,
         "carousel_en": carousel_en,
         "reddit_promo_text": reddit_promo if isinstance(reddit_promo, str) else "",
-        "caption_ko": caption_ko if isinstance(caption_ko, str) else "",
-        "caption_en": caption_en if isinstance(caption_en, str) else "",
+        "caption_ko": caption_ko_safe,
+        "caption_en": caption_en_safe,
         "og_category_tag": og_category_tag if isinstance(og_category_tag, str) else "",
     }
 

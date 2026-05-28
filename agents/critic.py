@@ -99,6 +99,33 @@ def critic_node(state: dict[str, Any]) -> dict[str, Any]:
     caption_ko = (state.get("caption_ko") or "").strip()
     caption_en = (state.get("caption_en") or "").strip()
 
+    # Missing-caption guard — caption_ko 가 비었으면 즉시 하드 reject.
+    # Writer 가 다시 작업해 caption_ko 를 반드시 채우도록 강제.
+    if not caption_ko:
+        print(
+            "[Critic] Intercepted missing caption_ko — "
+            "forcing score=0.0, approved=False (hard reject)."
+        )
+        missing_caption_feedback = (
+            "캡션(caption_ko)이 누락되었습니다. 반드시 생성해야 합니다. "
+            "writer_prompt.py 의 6단계 caption_ko 구조(intro / ⭐️picks / "
+            "💡tip / 📍address-or-skip / by.#깨알톡 / hashtags)를 그대로 따라 작성하세요."
+        )
+        return {
+            "critic_score": 0.0,
+            "critic_feedback": missing_caption_feedback,
+            "critic_feedback_ko": missing_caption_feedback,
+            "critic_feedback_en": "[EMPTY] caption_ko missing — must be regenerated.",
+            "critic_feedback_reddit": "[EMPTY] caption_ko missing — must be regenerated.",
+            "approved": False,
+            "history": [{
+                "node": "critic",
+                "score": 0.0,
+                "approved": False,
+                "missing_caption_intercept": True,
+            }],
+        }
+
     # Empty/trivial-draft guard — must run BEFORE banned-word scoring.
     # An empty KO draft trivially has 0 banned words and would otherwise
     # auto-pass with score 0.9. The "---" check requires at least one slide

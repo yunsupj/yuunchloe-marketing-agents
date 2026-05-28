@@ -219,19 +219,24 @@ def _build_blocks(
             }
         )
 
-    if caption_ko:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": _truncate(
-                        f"*📸 IG Caption (KO)*\n{caption_ko}",
-                        _SLACK_TEXT_BUDGET,
-                    ),
-                },
-            }
+    # caption_ko 가 비었더라도 블록을 무조건 띄운다 — 누락이 슬랙에서 즉시 보이게.
+    caption_text = (
+        f"*📸 IG Caption (KO)*\n{caption_ko}"
+        if caption_ko
+        else (
+            "*📸 IG Caption (KO)*\n"
+            "_(🚨 LLM이 캡션을 생성하지 못했습니다. 수동으로 작성해주세요.)_"
         )
+    )
+    blocks.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": _truncate(caption_text, _SLACK_TEXT_BUDGET),
+            },
+        }
+    )
 
     if reddit_promo_text:
         blocks.append({"type": "divider"})

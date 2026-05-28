@@ -88,18 +88,17 @@ def _normalize_photos(value: Any) -> list[str]:
     ][:MAX_PHOTOS]
 
 
-def get_local_hotplace(topic: str) -> list[str]:
+def get_local_hotplace(hotspot_id: Any) -> list[str]:
     """
-    Look the topic up against `marketing_hotspots` and return the matched
-    hotspot's `photo_urls`. Returns [] when supabase / table / row is missing
-    so the caller can degrade gracefully.
+    `marketing_hotspots` 에서 주어진 hotspot_id 행의 `photo_urls` 만 단일
+    조회하여 반환한다. 풀스캔 + 이름 substring 매칭은 폐기됨.
 
-    Matching strategy: pull all hotspots once and pick the row whose `name`
-    is a substring of the topic (or vice versa). The auto_scheduler feeds
-    topics that are exactly hotspot names, so this matches reliably without
-    needing fancy fuzzy logic.
+    auto_scheduler 가 이미 photo_urls 를 state.raw_photo_urls 로 주입해
+    주므로 이 함수는 사실상 fallback 용이며, hotspot_id 가 있을 때만 호출
+    된다. supabase / 행 누락 시 [] 를 반환해 호출자가 우아하게 폴백할 수
+    있게 한다.
     """
-    if not topic:
+    if hotspot_id is None:
         return []
     client = _build_supabase_client()
     if client is None:
@@ -108,27 +107,19 @@ def get_local_hotplace(topic: str) -> list[str]:
     try:
         resp = (
             client.table("marketing_hotspots")
-            .select("name, photo_urls")
+            .select("photo_urls")
+            .eq("id", hotspot_id)
+            .limit(1)
             .execute()
         )
     except Exception as e:
-        print(f"[Collector] marketing_hotspots query failed: {e!r}")
+        print(f"[Collector] marketing_hotspots id={hotspot_id} query failed: {e!r}")
         return []
 
     rows = getattr(resp, "data", None) or []
-    topic_lower = topic.lower()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = (row.get("name") or "").strip()
-        if not name:
-            continue
-        name_lower = name.lower()
-        if name_lower in topic_lower or topic_lower in name_lower:
-            photos = _normalize_photos(row.get("photo_urls"))
-            if photos:
-                return photos
-    return []
+    if not rows or not isinstance(rows[0], dict):
+        return []
+    return _normalize_photos(rows[0].get("photo_urls"))
 
 
 # =============================================================================
@@ -291,13 +282,21 @@ def collector_node(state: dict[str, Any]) -> dict[str, Any]:
     original_query = (state.get("research_notes") or "").strip()
     target_region = state.get("target_region") or {}
     region_label = target_region.get("label", "LA / OC")
+    hotspot_id = state.get("hotspot_id")
 
-    # 1. Try local DB first (marketing_hotspots) — fast, free, no LLM needed.
-    photo_urls = get_local_hotplace(original_query) if original_query else []
+    # 1. auto_scheduler 가 marketing_hotspots 에서 미리 주입한 사진을 우선 사용.
+    photo_urls: list[str] = [
+        u for u in (state.get("raw_photo_urls") or [])
+        if isinstance(u, str) and u.strip()
+    ]
+
+    # 2. preload 가 없고 hotspot_id 가 있으면 ID 기반으로 단일 행만 조회 (O(1)).
+    if not photo_urls and hotspot_id is not None:
+        photo_urls = get_local_hotplace(hotspot_id)
+
     found_address: str | None = None
 
-    # 2. If local DB has no photos, run the Gatekeeper LLM to decide whether
-    #    this topic is a specific business worth hitting Google Places for.
+    # 3. 그래도 사진이 없으면 Gatekeeper LLM → Google Places 폴백.
     if original_query and not photo_urls:
         places_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
         if places_api_key:

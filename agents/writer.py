@@ -85,6 +85,22 @@ def _select_photo_urls(state: dict[str, Any]) -> list[str]:
     ][:MAX_VISION_IMAGES]
 
 
+def _inject_region(value: Any, region_name: str) -> Any:
+    """
+    brand_voice 의 persona / do / dont 안에 들어있는 리터럴 `{region_name}` 토큰을
+    실제 타겟 지역명으로 치환한다. `.format()` 과 충돌하지 않도록 `.replace()` 사용.
+    str → 치환된 str, list[str] → 항목별 치환된 list, 그 외 → 원본 유지.
+    """
+    if isinstance(value, str):
+        return value.replace("{region_name}", region_name)
+    if isinstance(value, list):
+        return [
+            v.replace("{region_name}", region_name) if isinstance(v, str) else v
+            for v in value
+        ]
+    return value
+
+
 def _render_system_prompt(state: dict[str, Any]) -> str:
     app_context = state.get("app_context") or {}
     target_region = state.get("target_region") or {}
@@ -92,13 +108,23 @@ def _render_system_prompt(state: dict[str, Any]) -> str:
 
     photo_urls = _select_photo_urls(state)
 
+    # 동적 지역 주입 — 타겟 지역의 label 을 brand_voice 의 모든 템플릿 슬롯에 치환.
+    # 'LA / OC', 'NY', 'SD' 등 어느 지역이 와도 페르소나가 그 지역의 에디터로 변신.
+    region_name = target_region.get("label") or "this region"
+
+    persona = _inject_region(
+        brand_voice.get("persona") or "(persona not specified)", region_name
+    )
+    do_list = _inject_region(brand_voice.get("do"), region_name)
+    dont_list = _inject_region(brand_voice.get("dont"), region_name)
+
     prompt = WRITER_SYSTEM_PROMPT.format(
         app_name=app_context.get("app_name", "the app"),
-        target_region_label=target_region.get("label", "this region"),
-        brand_voice_persona=brand_voice.get("persona") or "(persona not specified)",
+        target_region_label=region_name,
+        brand_voice_persona=persona,
         brand_voice_tone=brand_voice.get("tone") or "(tone not specified)",
-        brand_voice_do=render_do_dont(brand_voice.get("do")),
-        brand_voice_dont=render_do_dont(brand_voice.get("dont")),
+        brand_voice_do=render_do_dont(do_list),
+        brand_voice_dont=render_do_dont(dont_list),
         research_notes=state.get("research_notes") or "(no research notes provided)",
         raw_photo_count=len(photo_urls),
     )

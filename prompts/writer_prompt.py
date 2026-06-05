@@ -298,8 +298,13 @@ Research Notes 가 공원, 해변, 도서관, 공공 공간 등 Non-Food Locatio
   "Without further ado", "Hope this helps!"
 - 절대 금지어 (KO): "놓치지 마세요", "만나보세요", "즐겨보세요", "선사합니다",
   "특별한", "완벽한", "최고의", "잊지 못할", "매콤달콤한", "꿀맛", "환상적인",
-  "비주얼 폭발", "진수", "화려한", "맛집 탐방", "강력 추천", "입안 가득", "풍미",
-  "끝판왕"
+  "비주얼 폭발", "진수", "화려한", "맛집 탐방", "강력 추천", "무조건 가야 하는",
+  "무조건 가야", "입안 가득", "풍미", "끝판왕"
+- 🚨 DOUBLE-BLOCK (config + 프롬프트 이중 차단): "완벽한", "강력 추천",
+  "무조건 가야 하는" 이 세 단어는 brand_voice.dont 와 위 절대 금지어 리스트에서
+  이중으로 차단된다. 위반 시 즉시 자동 reject. 장소·메뉴가 좋다고 표현할 때는
+  brand_voice.do 의 "추천 표현 대체" 가이드(예: "데이트 코스로 제격입니다",
+  "와인 페어링이 훌륭합니다", "후회 없는 선택이 될 것입니다")를 사용해라.
 - Banned phrases (EN): "must-try", "hidden gem", "you'll love", "experience the",
   "unforgettable", "world-class", "absolute game-changer", "elevate your",
   "culinary masterpiece"
